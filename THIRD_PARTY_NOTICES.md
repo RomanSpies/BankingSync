@@ -8,9 +8,14 @@ bankingsync uses the following third-party libraries. Their licenses are reprodu
 |---|---|---|
 | [github.com/golang-jwt/jwt/v5](https://github.com/golang-jwt/jwt) | v5.3.0 | MIT |
 | [github.com/google/uuid](https://github.com/google/uuid) | v1.6.0 | BSD-3-Clause |
-| [github.com/grafana/otel-profiling-go](https://github.com/grafana/otel-profiling-go) | v0.5.1 | Apache-2.0 |
 | [github.com/grafana/pyroscope-go](https://github.com/grafana/pyroscope-go) | v1.2.8 | Apache-2.0 |
 | [go.opentelemetry.io/otel](https://github.com/open-telemetry/opentelemetry-go) | v1.42.0 | Apache-2.0 |
+| [go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc](https://github.com/open-telemetry/opentelemetry-go) | v1.42.0 | Apache-2.0 |
+| [go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc](https://github.com/open-telemetry/opentelemetry-go) | v1.42.0 | Apache-2.0 |
+| [go.opentelemetry.io/otel/metric](https://github.com/open-telemetry/opentelemetry-go) | v1.42.0 | Apache-2.0 |
+| [go.opentelemetry.io/otel/sdk](https://github.com/open-telemetry/opentelemetry-go) | v1.42.0 | Apache-2.0 |
+| [go.opentelemetry.io/otel/sdk/metric](https://github.com/open-telemetry/opentelemetry-go) | v1.42.0 | Apache-2.0 |
+| [go.opentelemetry.io/otel/trace](https://github.com/open-telemetry/opentelemetry-go) | v1.42.0 | Apache-2.0 |
 | [google.golang.org/protobuf](https://github.com/protocolbuffers/protobuf-go) | v1.36.11 | BSD-3-Clause |
 | [modernc.org/sqlite](https://gitlab.com/cznic/sqlite) | v1.29.10 | BSD-3-Clause |
 
@@ -45,6 +50,14 @@ bankingsync uses the following third-party libraries. Their licenses are reprodu
 | modernc.org/memory | v1.8.0 | BSD-3-Clause |
 | modernc.org/strutil | v1.2.0 | BSD-3-Clause |
 | modernc.org/token | v1.1.0 | BSD-3-Clause |
+
+## Inlined Code
+
+| Source | File | License |
+|---|---|---|
+| [github.com/grafana/otel-profiling-go](https://github.com/grafana/otel-profiling-go) v0.5.1 | `profiling.go` | Apache-2.0 |
+
+`profiling.go` contains code derived from grafana/otel-profiling-go v0.5.1, modified to enable per-span profiling and fix a scope assignment bug. The original library is licensed under the Apache License 2.0.
 
 ## License Texts
 

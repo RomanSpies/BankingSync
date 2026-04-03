@@ -1,11 +1,13 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -433,7 +435,7 @@ func TestHandleTestEmail_POST_nilFunc_returnsError(t *testing.T) {
 
 func TestHandleTestEmail_POST_success(t *testing.T) {
 	st := openTestStore(t)
-	srv, _ := New(st, noopEB(), func() {}, func() error { return nil }, TemplateFS)
+	srv, _ := New(st, noopEB(), func() {}, func(context.Context) error { return nil }, TemplateFS)
 	w := post(t, srv, "/test-email", nil)
 	if !strings.Contains(w.Body.String(), `"ok":true`) {
 		t.Errorf("expected ok:true, got %s", w.Body.String())
@@ -442,7 +444,7 @@ func TestHandleTestEmail_POST_success(t *testing.T) {
 
 func TestHandleTestEmail_POST_failure(t *testing.T) {
 	st := openTestStore(t)
-	srv, _ := New(st, noopEB(), func() {}, func() error { return fmt.Errorf("smtp down") }, TemplateFS)
+	srv, _ := New(st, noopEB(), func() {}, func(context.Context) error { return fmt.Errorf("smtp down") }, TemplateFS)
 	w := post(t, srv, "/test-email", nil)
 	if !strings.Contains(w.Body.String(), `"ok":false`) {
 		t.Errorf("expected ok:false, got %s", w.Body.String())
@@ -470,6 +472,176 @@ func TestHandleRenew_POST_unknownAccount_redirectsToStatus(t *testing.T) {
 	}
 	if loc := w.Header().Get("Location"); loc != "/status" {
 		t.Errorf("Location: got %q, want /status", loc)
+	}
+}
+
+// --- handleSBOM -------------------------------------------------------------
+
+const testSBOMJSON = `{
+	"bomFormat": "CycloneDX",
+	"specVersion": "1.5",
+	"version": 1,
+	"components": [
+		{"type":"library","name":"github.com/example/lib","version":"v1.2.3","purl":"pkg:golang/github.com/example/lib@v1.2.3","licenses":[{"license":{"id":"MIT"}}]},
+		{"type":"library","name":"github.com/other/pkg","version":"v0.4.0","purl":"pkg:golang/github.com/other/pkg@v0.4.0"},
+		{"type":"library","name":"ca-certificates","version":"20240226-r0","purl":"pkg:apk/alpine/ca-certificates@20240226-r0","licenses":[{"license":{"name":"MPL-2.0"}}]},
+		{"type":"library","name":"tzdata","version":"2024a-r0","purl":"pkg:apk/alpine/tzdata@2024a-r0"}
+	]
+}`
+
+func withSBOMFile(t *testing.T, content string) {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), "sbom.cdx.json")
+	if err := os.WriteFile(f, []byte(content), 0644); err != nil {
+		t.Fatalf("write sbom: %v", err)
+	}
+	old := SBOMPath
+	SBOMPath = f
+	t.Cleanup(func() { SBOMPath = old })
+}
+
+func TestHandleSBOM_GET_validFile(t *testing.T) {
+	srv, _ := newTestServer(t)
+	withSBOMFile(t, testSBOMJSON)
+
+	w := get(t, srv, "/sbom")
+	if w.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "github.com/example/lib") {
+		t.Error("expected Go module name in output")
+	}
+	if !strings.Contains(body, "ca-certificates") {
+		t.Error("expected OS package name in output")
+	}
+	if !strings.Contains(body, "MIT") {
+		t.Error("expected license in output")
+	}
+	if !strings.Contains(body, "CycloneDX 1.5") {
+		t.Error("expected format string in output")
+	}
+}
+
+func TestHandleSBOM_GET_missingFile(t *testing.T) {
+	srv, _ := newTestServer(t)
+	old := SBOMPath
+	SBOMPath = filepath.Join(t.TempDir(), "nonexistent.json")
+	t.Cleanup(func() { SBOMPath = old })
+
+	w := get(t, srv, "/sbom")
+	if w.Code != http.StatusOK {
+		t.Errorf("got %d, want 200 (renders info message)", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "not available") {
+		t.Error("expected 'not available' message")
+	}
+}
+
+func TestHandleSBOM_GET_invalidJSON(t *testing.T) {
+	srv, _ := newTestServer(t)
+	withSBOMFile(t, "not valid json")
+
+	w := get(t, srv, "/sbom")
+	if w.Code != http.StatusOK {
+		t.Errorf("got %d, want 200 (renders error)", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Failed to parse") {
+		t.Error("expected parse error message")
+	}
+}
+
+func TestHandleSBOM_GET_emptyComponents(t *testing.T) {
+	srv, _ := newTestServer(t)
+	withSBOMFile(t, `{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[]}`)
+
+	w := get(t, srv, "/sbom")
+	if w.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "not available") {
+		t.Error("should not show error for empty but valid SBOM")
+	}
+	if !strings.Contains(body, "CycloneDX 1.5") {
+		t.Error("expected format string even with no components")
+	}
+}
+
+func TestHandleSBOM_GET_categorisation(t *testing.T) {
+	srv, _ := newTestServer(t)
+	withSBOMFile(t, testSBOMJSON)
+
+	w := get(t, srv, "/sbom")
+	body := w.Body.String()
+	if !strings.Contains(body, "Go Dependencies") {
+		t.Error("expected Go Dependencies section")
+	}
+	if !strings.Contains(body, "OS Packages") {
+		t.Error("expected OS Packages section")
+	}
+}
+
+// --- handleSBOMJSON ---------------------------------------------------------
+
+func TestHandleSBOMJSON_validFile(t *testing.T) {
+	srv, _ := newTestServer(t)
+	withSBOMFile(t, testSBOMJSON)
+
+	w := get(t, srv, "/sbom.json")
+	if w.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type: got %q, want application/json", ct)
+	}
+	if cd := w.Header().Get("Content-Disposition"); !strings.Contains(cd, "sbom.cdx.json") {
+		t.Errorf("Content-Disposition: got %q, want attachment with sbom.cdx.json", cd)
+	}
+	if !strings.Contains(w.Body.String(), "CycloneDX") {
+		t.Error("expected raw JSON content in response")
+	}
+}
+
+func TestHandleSBOMJSON_missingFile(t *testing.T) {
+	srv, _ := newTestServer(t)
+	old := SBOMPath
+	SBOMPath = filepath.Join(t.TempDir(), "nonexistent.json")
+	t.Cleanup(func() { SBOMPath = old })
+
+	w := get(t, srv, "/sbom.json")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("got %d, want 404", w.Code)
+	}
+}
+
+// --- componentLicense -------------------------------------------------------
+
+func TestComponentLicense_id(t *testing.T) {
+	c := cdxComponent{Licenses: []cdxLicense{{License: cdxLicenseEntry{ID: "MIT"}}}}
+	if got := componentLicense(c); got != "MIT" {
+		t.Errorf("got %q, want MIT", got)
+	}
+}
+
+func TestComponentLicense_name(t *testing.T) {
+	c := cdxComponent{Licenses: []cdxLicense{{License: cdxLicenseEntry{Name: "Apache License 2.0"}}}}
+	if got := componentLicense(c); got != "Apache License 2.0" {
+		t.Errorf("got %q, want Apache License 2.0", got)
+	}
+}
+
+func TestComponentLicense_idPreferred(t *testing.T) {
+	c := cdxComponent{Licenses: []cdxLicense{{License: cdxLicenseEntry{ID: "Apache-2.0", Name: "Apache License 2.0"}}}}
+	if got := componentLicense(c); got != "Apache-2.0" {
+		t.Errorf("got %q, want Apache-2.0 (ID preferred over Name)", got)
+	}
+}
+
+func TestComponentLicense_empty(t *testing.T) {
+	c := cdxComponent{}
+	if got := componentLicense(c); got != "" {
+		t.Errorf("got %q, want empty", got)
 	}
 }
 

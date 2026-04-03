@@ -10,14 +10,27 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.Version=${VERSION}" -o /bankingsync .
 
-FROM alpine:3
+FROM alpine:3 AS runtime
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata \
+    && addgroup -S bankingsync && adduser -S bankingsync -G bankingsync \
+    && mkdir -p /data && chown bankingsync:bankingsync /data
 
 WORKDIR /app
 
 COPY --from=builder /bankingsync /app/bankingsync
 
+FROM runtime AS sbom
+
+COPY --from=anchore/syft:latest /syft /usr/local/bin/syft
+RUN syft dir:/ --exclude './usr/local/bin/**' -o cyclonedx-json=/app/sbom.cdx.json
+
+FROM runtime
+
+COPY --from=sbom /app/sbom.cdx.json /app/sbom.cdx.json
+
 VOLUME ["/data"]
+
+USER bankingsync
 
 ENTRYPOINT ["/app/bankingsync"]

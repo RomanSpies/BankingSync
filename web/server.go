@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,20 +22,51 @@ import (
 	"bankingsync/store"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // AppVersion is set by the main package at startup.
 var AppVersion string
 
+// SBOMPath is the path to the CycloneDX SBOM file generated during the Docker build.
+var SBOMPath = "/app/sbom.cdx.json"
+
 // SyncTriggerFunc is called when the user requests a manual sync from the web UI.
 type SyncTriggerFunc func()
+
+// CycloneDX types for SBOM parsing.
+type cdxBOM struct {
+	BOMFormat   string         `json:"bomFormat"`
+	SpecVersion string         `json:"specVersion"`
+	Version     int            `json:"version"`
+	Components  []cdxComponent `json:"components"`
+}
+
+type cdxComponent struct {
+	Type     string       `json:"type"`
+	Name     string       `json:"name"`
+	Version  string       `json:"version"`
+	PURL     string       `json:"purl"`
+	Licenses []cdxLicense `json:"licenses"`
+}
+
+type cdxLicenseEntry struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type cdxLicense struct {
+	License cdxLicenseEntry `json:"license"`
+}
 
 // Server is the embedded web UI and health endpoint server.
 type Server struct {
 	st         *store.Store
 	eb         *enablebanking.Client
 	trigger    SyncTriggerFunc
-	testEmail  func() error
+	testEmail  func(context.Context) error
 	templateFS fs.FS
 
 	mu          sync.Mutex
@@ -46,12 +78,12 @@ type Server struct {
 
 // NewFromDir creates the Server using templates loaded from the "web/templates"
 // subdirectory on disk. It is the standard constructor for production use.
-func NewFromDir(st *store.Store, eb *enablebanking.Client, trigger SyncTriggerFunc, testEmail func() error) (*Server, error) {
+func NewFromDir(st *store.Store, eb *enablebanking.Client, trigger SyncTriggerFunc, testEmail func(context.Context) error) (*Server, error) {
 	return New(st, eb, trigger, testEmail, os.DirFS("web"))
 }
 
 // New creates the Server, registers all routes, and validates templates from templateFS.
-func New(st *store.Store, eb *enablebanking.Client, trigger SyncTriggerFunc, testEmail func() error, templateFS fs.FS) (*Server, error) {
+func New(st *store.Store, eb *enablebanking.Client, trigger SyncTriggerFunc, testEmail func(context.Context) error, templateFS fs.FS) (*Server, error) {
 	// Validate all templates at startup to catch authoring errors early.
 	funcs := template.FuncMap{"version": func() string { return AppVersion }}
 	if _, err := template.New("").Funcs(funcs).ParseFS(templateFS, "templates/*.html"); err != nil {
@@ -79,6 +111,8 @@ func New(st *store.Store, eb *enablebanking.Client, trigger SyncTriggerFunc, tes
 	s.mux.HandleFunc("/sync/now", s.handleSyncNow)
 	s.mux.HandleFunc("/test-email", s.handleTestEmail)
 	s.mux.HandleFunc("/health", s.handleHealth)
+	s.mux.HandleFunc("/sbom", s.handleSBOM)
+	s.mux.HandleFunc("/sbom.json", s.handleSBOMJSON)
 
 	return s, nil
 }
@@ -91,7 +125,7 @@ func (s *Server) Mux() *http.ServeMux { return s.mux }
 func (s *Server) StartTLS(addr, certFile, keyFile string) error {
 	s.srv = &http.Server{
 		Addr:              addr,
-		Handler:           s.mux,
+		Handler:           traceMiddleware(s.mux),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Printf("Web UI → https://localhost%s", addr)
@@ -99,6 +133,36 @@ func (s *Server) StartTLS(addr, certFile, keyFile string) error {
 		return err
 	}
 	return nil
+}
+
+// statusWriter captures the HTTP status code for trace attributes.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// traceMiddleware wraps an http.Handler to create an OTel span per request,
+// enabling Pyroscope profile correlation with web handler traces.
+func traceMiddleware(next http.Handler) http.Handler {
+	tracer := otel.Tracer("bankingsync/web")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx, span := tracer.Start(r.Context(), fmt.Sprintf("%s %s", r.Method, r.URL.Path),
+			trace.WithAttributes(
+				attribute.String("http.method", r.Method),
+				attribute.String("http.path", r.URL.Path),
+			),
+		)
+		defer span.End()
+
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(sw, r.WithContext(ctx))
+		span.SetAttributes(attribute.Int("http.status_code", sw.status))
+	})
 }
 
 // Shutdown gracefully stops the server.
@@ -285,7 +349,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	_ = s.st.SetSetting("pending_auth_url", "")
 
 	appBaseURL := detectBaseURL(r, s.st)
-	authURL, err := s.eb.StartAuth(bankName, bankCountry, psuType, stateUUID, appBaseURL)
+	authURL, err := s.eb.StartAuth(r.Context(), bankName, bankCountry, psuType, stateUUID, appBaseURL)
 	if err != nil {
 		banks, _ := s.getASPSPs()
 		s.render(w, "connect.html", connectData{
@@ -323,7 +387,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sr, err := s.eb.CompleteAuth(code, rawState)
+	sr, err := s.eb.CompleteAuth(r.Context(), code, rawState)
 	if err != nil {
 		http.Redirect(w, r, "/connect?error="+urlEncode("Auth failed: "+err.Error()), http.StatusFound)
 		return
@@ -514,7 +578,7 @@ func (s *Server) handleRenew(w http.ResponseWriter, r *http.Request) {
 	_ = s.st.SetSetting("pending_renew_account_id", idStr)
 
 	appBaseURL := detectBaseURL(r, s.st)
-	authURL, err := s.eb.StartAuth(bankName, bankCountry, "personal", stateUUID, appBaseURL)
+	authURL, err := s.eb.StartAuth(r.Context(), bankName, bankCountry, "personal", stateUUID, appBaseURL)
 	if err != nil {
 		http.Redirect(w, r, "/connect?error="+urlEncode("Failed to start renewal: "+err.Error()), http.StatusFound)
 		return
@@ -586,7 +650,7 @@ func (s *Server) handleTestEmail(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"ok":false,"error":"test email not configured"}`)
 		return
 	}
-	if err := s.testEmail(); err != nil {
+	if err := s.testEmail(r.Context()); err != nil {
 		fmt.Fprintf(w, `{"ok":false,"error":%q}`, err.Error())
 		return
 	}
@@ -642,6 +706,93 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+func (s *Server) handleSBOM(w http.ResponseWriter, r *http.Request) {
+	type sbomRow struct {
+		Name    string
+		Version string
+		License string
+	}
+	type sbomData struct {
+		Title      string
+		Error      string
+		Format     string
+		GoModules  []sbomRow
+		OSPackages []sbomRow
+		Other      []sbomRow
+		Total      int
+	}
+
+	data, err := os.ReadFile(SBOMPath)
+	if err != nil {
+		s.render(w, "sbom.html", sbomData{
+			Title: "SBOM",
+			Error: "SBOM file not available. It is generated during the Docker build.",
+		})
+		return
+	}
+
+	var bom cdxBOM
+	if err := json.Unmarshal(data, &bom); err != nil {
+		s.render(w, "sbom.html", sbomData{
+			Title: "SBOM",
+			Error: "Failed to parse SBOM: " + err.Error(),
+		})
+		return
+	}
+
+	var goMods, osPkgs, other []sbomRow
+	for _, c := range bom.Components {
+		row := sbomRow{
+			Name:    c.Name,
+			Version: c.Version,
+			License: componentLicense(c),
+		}
+		switch {
+		case strings.HasPrefix(c.PURL, "pkg:golang/"):
+			goMods = append(goMods, row)
+		case strings.HasPrefix(c.PURL, "pkg:apk/"):
+			osPkgs = append(osPkgs, row)
+		default:
+			other = append(other, row)
+		}
+	}
+
+	sort.Slice(goMods, func(i, j int) bool { return goMods[i].Name < goMods[j].Name })
+	sort.Slice(osPkgs, func(i, j int) bool { return osPkgs[i].Name < osPkgs[j].Name })
+	sort.Slice(other, func(i, j int) bool { return other[i].Name < other[j].Name })
+
+	s.render(w, "sbom.html", sbomData{
+		Title:      "SBOM",
+		Format:     bom.BOMFormat + " " + bom.SpecVersion,
+		GoModules:  goMods,
+		OSPackages: osPkgs,
+		Other:      other,
+		Total:      len(bom.Components),
+	})
+}
+
+func (s *Server) handleSBOMJSON(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile(SBOMPath)
+	if err != nil {
+		http.Error(w, "SBOM not available", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", `attachment; filename="sbom.cdx.json"`)
+	w.Write(data)
+}
+
+func componentLicense(c cdxComponent) string {
+	if len(c.Licenses) == 0 {
+		return ""
+	}
+	l := c.Licenses[0].License
+	if l.ID != "" {
+		return l.ID
+	}
+	return l.Name
+}
+
 func (s *Server) getASPSPs() ([]enablebanking.ASPSP, error) {
 	cachedJSON, _ := s.st.GetSetting("aspsp_cache")
 	cachedAt, _ := s.st.GetSetting("aspsp_cache_at")
@@ -655,7 +806,7 @@ func (s *Server) getASPSPs() ([]enablebanking.ASPSP, error) {
 		}
 	}
 
-	banks, err := s.eb.GetASPSPs()
+	banks, err := s.eb.GetASPSPs(context.Background())
 	if err != nil {
 		return nil, err
 	}

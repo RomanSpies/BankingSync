@@ -3,6 +3,7 @@ package actual
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Client is an Actual Budget HTTP client that downloads the budget SQLite
@@ -32,20 +38,30 @@ type Client struct {
 
 // NewClient authenticates against the Actual Budget server, resolves the file
 // identified by syncID, downloads the budget, and performs an initial sync.
-func NewClient(baseURL, password, syncID, dataDir string) (*Client, error) {
+func NewClient(ctx context.Context, baseURL, password, syncID, dataDir string) (*Client, error) {
+	tracer := otel.Tracer("bankingsync/actual")
+	ctx, span := tracer.Start(ctx, "actual.init")
+	defer span.End()
+
 	c := &Client{
 		httpClient: &http.Client{Timeout: 60 * time.Second},
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		dataDir:    dataDir,
 	}
 
-	if err := c.login(password); err != nil {
+	if err := c.login(ctx, password); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "login failed")
 		return nil, fmt.Errorf("login: %w", err)
 	}
-	if err := c.setFile(syncID); err != nil {
+	if err := c.setFile(ctx, syncID); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "set file failed")
 		return nil, fmt.Errorf("set file: %w", err)
 	}
-	if err := c.downloadBudget(); err != nil {
+	if err := c.downloadBudget(ctx); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "download failed")
 		return nil, fmt.Errorf("download budget: %w", err)
 	}
 	return c, nil
@@ -60,8 +76,13 @@ func (c *Client) Close() {
 
 // Commit sends all pending change messages to the Actual Budget sync endpoint
 // and persists the updated HULC clock.
-func (c *Client) Commit() error {
+func (c *Client) Commit(ctx context.Context) error {
+	tracer := otel.Tracer("bankingsync/actual")
+	ctx, span := tracer.Start(ctx, "actual.commit")
+	defer span.End()
+
 	changes := c.db.FlushChanges()
+	span.SetAttributes(attribute.Int("change_count", len(changes)))
 	if len(changes) == 0 && c.groupID == "" {
 		return nil
 	}
@@ -84,7 +105,9 @@ func (c *Client) Commit() error {
 	}
 
 	if c.groupID != "" {
-		if _, err := c.syncSync(req); err != nil {
+		if _, err := c.syncSync(ctx, req); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "sync_sync failed")
 			return fmt.Errorf("sync_sync: %w", err)
 		}
 	}
@@ -95,8 +118,8 @@ func (c *Client) Commit() error {
 	return nil
 }
 
-func (c *Client) get(path string, extraHeaders map[string]string) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/"+strings.TrimLeft(path, "/"), nil)
+func (c *Client) get(ctx context.Context, path string, extraHeaders map[string]string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/"+strings.TrimLeft(path, "/"), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -107,12 +130,12 @@ func (c *Client) get(path string, extraHeaders map[string]string) (*http.Respons
 	return c.httpClient.Do(req)
 }
 
-func (c *Client) postJSON(path string, body any) (*http.Response, error) {
+func (c *Client) postJSON(ctx context.Context, path string, body any) (*http.Response, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/"+strings.TrimLeft(path, "/"), bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/"+strings.TrimLeft(path, "/"), bytes.NewReader(data))
 	if err != nil {
 		return nil, err
 	}
@@ -123,8 +146,8 @@ func (c *Client) postJSON(path string, body any) (*http.Response, error) {
 	return c.httpClient.Do(req)
 }
 
-func (c *Client) postProto(path string, body []byte, extraHeaders map[string]string) (*http.Response, error) {
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/"+strings.TrimLeft(path, "/"), bytes.NewReader(body))
+func (c *Client) postProto(ctx context.Context, path string, body []byte, extraHeaders map[string]string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/"+strings.TrimLeft(path, "/"), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -136,12 +159,18 @@ func (c *Client) postProto(path string, body []byte, extraHeaders map[string]str
 	return c.httpClient.Do(req)
 }
 
-func (c *Client) login(password string) error {
-	resp, err := c.postJSON("account/login", map[string]string{
+func (c *Client) login(ctx context.Context, password string) error {
+	tracer := otel.Tracer("bankingsync/actual")
+	ctx, span := tracer.Start(ctx, "actual.login")
+	defer span.End()
+
+	resp, err := c.postJSON(ctx, "account/login", map[string]string{
 		"loginMethod": "password",
 		"password":    password,
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return err
 	}
 	var body struct {
@@ -156,7 +185,10 @@ func (c *Client) login(password string) error {
 		return fmt.Errorf("decode login response: %w", err)
 	}
 	if resp.StatusCode >= 400 || body.Status == "error" {
-		return fmt.Errorf("login failed (status=%d reason=%s)", resp.StatusCode, body.Reason)
+		err := fmt.Errorf("login failed (status=%d reason=%s)", resp.StatusCode, body.Reason)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return err
 	}
 	if body.Data.Token == "" {
 		return fmt.Errorf("login returned empty token — check your password")
@@ -173,8 +205,8 @@ type remoteFile struct {
 	EncryptKeyID string `json:"encryptKeyId"`
 }
 
-func (c *Client) listUserFiles() ([]remoteFile, error) {
-	resp, err := c.get("sync/list-user-files", nil)
+func (c *Client) listUserFiles(ctx context.Context) ([]remoteFile, error) {
+	resp, err := c.get(ctx, "sync/list-user-files", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -195,8 +227,8 @@ func (c *Client) listUserFiles() ([]remoteFile, error) {
 	return body.Data, nil
 }
 
-func (c *Client) setFile(id string) error {
-	resp, err := c.get("sync/list-user-files", nil)
+func (c *Client) setFile(ctx context.Context, id string) error {
+	resp, err := c.get(ctx, "sync/list-user-files", nil)
 	if err != nil {
 		return err
 	}
@@ -234,7 +266,11 @@ func (c *Client) setFile(id string) error {
 	}
 }
 
-func (c *Client) downloadBudget() error {
+func (c *Client) downloadBudget(ctx context.Context) error {
+	tracer := otel.Tracer("bankingsync/actual")
+	ctx, span := tracer.Start(ctx, "actual.download_budget")
+	defer span.End()
+
 	if c.keyID != "" {
 		return fmt.Errorf("encrypted budgets are not supported by this client (keyId=%s)", c.keyID)
 	}
@@ -246,22 +282,26 @@ func (c *Client) downloadBudget() error {
 		if _, err := os.Stat(metaPath); err == nil {
 			if cachedGroupID := readGroupIDFromMeta(metaPath); cachedGroupID == c.groupID && c.groupID != "" {
 				log.Println("Re-using cached budget database")
-				return c.openAndSync()
+				span.SetAttributes(attribute.Bool("cache_hit", true))
+				return c.openAndSync(ctx)
 			}
 			log.Println("Sync ID changed on server — re-downloading budget")
 			_ = os.Remove(dbPath)
 			_ = os.Remove(metaPath)
 		}
 	}
+	span.SetAttributes(attribute.Bool("cache_hit", false))
 
 	if err := os.MkdirAll(c.dataDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", c.dataDir, err)
 	}
 
-	resp, err := c.get("sync/download-user-file", map[string]string{
+	resp, err := c.get(ctx, "sync/download-user-file", map[string]string{
 		"X-ACTUAL-FILE-ID": c.fileID,
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("download-user-file: %w", err)
 	}
 	defer resp.Body.Close()
@@ -272,6 +312,7 @@ func (c *Client) downloadBudget() error {
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("download-user-file HTTP %d", resp.StatusCode)
 	}
+	span.SetAttributes(attribute.Int("zip_bytes", len(zipBytes)))
 
 	if err := extractZip(zipBytes, c.dataDir); err != nil {
 		return fmt.Errorf("extract zip: %w", err)
@@ -279,10 +320,10 @@ func (c *Client) downloadBudget() error {
 
 	patchMetaGroupID(metaPath, c.groupID)
 
-	return c.openAndSync()
+	return c.openAndSync(ctx)
 }
 
-func (c *Client) openAndSync() error {
+func (c *Client) openAndSync(ctx context.Context) error {
 	db, err := OpenDB(filepath.Join(c.dataDir, "db.sqlite"))
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
@@ -295,21 +336,27 @@ func (c *Client) openAndSync() error {
 	}
 	c.hulc = hulc
 
-	if err := c.sync(); err != nil {
+	if err := c.sync(ctx); err != nil {
 		return fmt.Errorf("initial sync: %w", err)
 	}
 	return nil
 }
 
-func (c *Client) sync() error {
+func (c *Client) sync(ctx context.Context) error {
+	tracer := otel.Tracer("bankingsync/actual")
+	ctx, span := tracer.Start(ctx, "actual.sync")
+	defer span.End()
+
 	req := SyncRequest{
 		FileID:  c.fileID,
 		GroupID: c.groupID,
 		Since:   c.hulc.SinceTimestamp(),
 	}
 
-	resp, err := c.syncSync(req)
+	resp, err := c.syncSync(ctx, req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return err
 	}
 
@@ -317,6 +364,7 @@ func (c *Client) sync() error {
 	if err != nil {
 		return fmt.Errorf("decode sync messages: %w", err)
 	}
+	span.SetAttributes(attribute.Int("message_count", len(msgs)))
 
 	if err := c.db.ApplyMessages(msgs); err != nil {
 		return fmt.Errorf("apply messages: %w", err)
@@ -332,19 +380,31 @@ func (c *Client) sync() error {
 	return nil
 }
 
-func (c *Client) syncSync(req SyncRequest) (*SyncResponse, error) {
+func (c *Client) syncSync(ctx context.Context, req SyncRequest) (*SyncResponse, error) {
+	tracer := otel.Tracer("bankingsync/actual")
+	ctx, span := tracer.Start(ctx, "actual.sync_sync",
+		trace.WithAttributes(attribute.Int("request_messages", len(req.Messages))),
+	)
+	defer span.End()
+
 	body := req.Encode()
-	resp, err := c.postProto("sync/sync", body, map[string]string{
+	resp, err := c.postProto(ctx, "sync/sync", body, map[string]string{
 		"X-ACTUAL-FILE-ID": c.fileID,
 	})
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("POST sync/sync: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("sync/sync HTTP %d: %s", resp.StatusCode, raw)
+		err := fmt.Errorf("sync/sync HTTP %d: %s", resp.StatusCode, raw)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
+	span.SetAttributes(attribute.Int("response_bytes", len(raw)))
 	return DecodeSyncResponse(raw)
 }
 
@@ -458,6 +518,6 @@ func (c *Client) LoadRules() (*RuleSet, error) {
 
 // Resync fetches and applies any new messages from the server, refreshing the
 // local database without committing local changes.
-func (c *Client) Resync() error {
-	return c.sync()
+func (c *Client) Resync(ctx context.Context) error {
+	return c.sync(ctx)
 }

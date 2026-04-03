@@ -28,6 +28,7 @@ bankingsync connects to your bank via PSD2 open banking and imports transactions
 - **Email notifications** — get alerted on sync failures and before a bank session needs to be re-authorised, with a test email button to verify your setup
 - **TLS out of the box** — a self-signed certificate is generated on first start so the web UI is always served over HTTPS
 - **Full observability** — ship OpenTelemetry metrics and traces to your collector, and continuous profiling data to Grafana Pyroscope
+- **Supply chain transparency** — every container image ships with a CycloneDX SBOM (Go modules + OS packages) viewable in the web UI, downloadable as JSON, and attached as a BuildKit attestation on Docker Hub
 - **Minimal footprint** — single Go binary, single Docker container, SQLite for storage, zero runtime dependencies
 
 ## How it works
@@ -169,6 +170,7 @@ To use your own TLS certificate, place it at `/data/tls.crt` and `/data/tls.key`
 | Pick Account | `/pick-account` | Choose a sub-account (shows IBAN, owner, currency), set the target Actual Budget account and sync start date |
 | Status | `/status` | View accounts, sync history, trigger sync, test email, reset sync, renew or remove accounts |
 | Test Email | `POST /test-email` | Send a test email to verify SMTP configuration |
+| SBOM | `/sbom` | Browse the embedded CycloneDX SBOM — Go module and OS package inventory with licenses. Raw JSON download at `/sbom.json`. |
 | Health | `/health` | Returns JSON with status (`ok`/`degraded`/`unhealthy`), version, connected accounts, expiring sessions, last sync info. HTTP 503 when unhealthy. |
 
 ## Session renewal

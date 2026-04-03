@@ -107,21 +107,21 @@ func newSyncer() (*Syncer, error) {
 	return &Syncer{state: state, st: st, eb: eb}, nil
 }
 
-func (s *Syncer) ensureActual() error {
+func (s *Syncer) ensureActual(ctx context.Context) error {
 	if s.ac != nil {
-		if err := s.ac.Resync(); err != nil {
+		if err := s.ac.Resync(ctx); err != nil {
 			log.Printf("Resync failed (%v) — reconnecting", err)
 			s.ac.Close()
 			s.ac = nil
-			return s.connect()
+			return s.connect(ctx)
 		}
 		return nil
 	}
-	return s.connect()
+	return s.connect(ctx)
 }
 
-func (s *Syncer) connect() error {
-	ac, err := actual.NewClient(
+func (s *Syncer) connect(ctx context.Context) error {
+	ac, err := actual.NewClient(ctx,
 		mustEnv("ACTUAL_URL"),
 		mustEnv("ACTUAL_PASSWORD"),
 		mustEnv("ACTUAL_SYNC_ID"),
@@ -163,7 +163,7 @@ func (s *Syncer) run() {
 			for _, e := range syncErrors {
 				body.WriteString("- " + e + "\n")
 			}
-			sendEmail("BankingSync: sync errors", body.String())
+			sendEmail(ctx, "BankingSync: sync errors", body.String())
 		}
 		if _, err := s.st.AddSyncLog(status, added, updated, skipped, elapsed, syncMessage); err != nil {
 			log.Printf("Failed to save sync log: %v", err)
@@ -177,9 +177,11 @@ func (s *Syncer) run() {
 	if err != nil || len(bankAccounts) == 0 {
 		log.Printf("No bank accounts configured — connect via web UI")
 		status = "no_session"
+		span.SetAttributes(attribute.Int("account_count", 0))
 		span.SetStatus(codes.Error, "no bank accounts")
 		return
 	}
+	span.SetAttributes(attribute.Int("account_count", len(bankAccounts)))
 
 	webAddr, _ := s.st.GetSetting("eb_base_url")
 	if webAddr == "" {
@@ -191,9 +193,11 @@ func (s *Syncer) run() {
 	}
 
 	_, connSpan := tracer.Start(ctx, "actual.ensure_connection")
-	connErr := s.ensureActual()
-	connSpan.End()
+	connErr := s.ensureActual(ctx)
 	if connErr != nil {
+		connSpan.RecordError(connErr)
+		connSpan.SetStatus(codes.Error, "connection failed")
+		connSpan.End()
 		log.Printf("Actual error: %v", connErr)
 		span.RecordError(connErr)
 		span.SetStatus(codes.Error, "connection failed")
@@ -201,6 +205,7 @@ func (s *Syncer) run() {
 		syncErrors = append(syncErrors, fmt.Sprintf("Actual Budget connection: %v", connErr))
 		return
 	}
+	connSpan.End()
 
 	var newlyTouched []*actual.Transaction
 	fetchFailed := 0
@@ -215,7 +220,7 @@ func (s *Syncer) run() {
 			daysLeft := int(time.Until(t).Hours() / 24)
 			if daysLeft < 7 {
 				log.Printf("WARNING: session for %s expires in %d days. Renew via %s", label, daysLeft, webAddr)
-				sendEmail(
+				sendEmail(ctx,
 					fmt.Sprintf("BankingSync: %s session expires in %d days", label, daysLeft),
 					fmt.Sprintf("Your Enable Banking session for %s expires in %d days.\n\nRenew it at: %s\n", label, daysLeft, webAddr),
 				)
@@ -243,20 +248,32 @@ func (s *Syncer) run() {
 
 		fetchStart := time.Now()
 		_, fetchSpan := tracer.Start(ctx, "enable_banking.fetch_transactions",
-			trace.WithAttributes(attribute.String("bank", label)),
+			trace.WithAttributes(
+				attribute.String("bank", label),
+				attribute.String("date_from", dateFrom.Format("2006-01-02")),
+				attribute.String("account_uid", acct.AccountUID),
+			),
 		)
-		rawTxns, err := s.eb.FetchTransactions(acct.AccountUID, dateFrom)
-		fetchSpan.End()
+		rawTxns, err := s.eb.FetchTransactions(ctx, acct.AccountUID, dateFrom)
+		fetchElapsed := time.Since(fetchStart).Seconds()
 		if s.met != nil {
-			s.met.fetchDuration.Record(ctx, time.Since(fetchStart).Seconds())
+			s.met.fetchDuration.Record(ctx, fetchElapsed)
 		}
 		if err != nil {
+			fetchSpan.RecordError(err)
+			fetchSpan.SetStatus(codes.Error, err.Error())
+			fetchSpan.End()
 			log.Printf("Enable Banking error (%s): %v", label, err)
 			span.RecordError(err)
 			syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", label, err))
 			fetchFailed++
 			continue
 		}
+		fetchSpan.SetAttributes(
+			attribute.Int("txn_count", len(rawTxns)),
+			attribute.Float64("duration_sec", fetchElapsed),
+		)
+		fetchSpan.End()
 
 		if len(rawTxns) == 0 {
 			log.Printf("No new transactions for %s", label)
@@ -284,9 +301,11 @@ func (s *Syncer) run() {
 		alreadyMatched := make([]*actual.Transaction, len(existing))
 		copy(alreadyMatched, existing)
 
+		acctAdded, acctUpdated, acctSkipped := 0, 0, 0
 		_, importSpan := tracer.Start(ctx, "import.transactions_batch",
 			trace.WithAttributes(
 				attribute.String("bank", label),
+				attribute.String("actual_account", accountName),
 				attribute.Int("txn_count", len(rawTxns)),
 			),
 		)
@@ -329,11 +348,14 @@ func (s *Syncer) run() {
 							log.Printf("SetPending: %v", err)
 						}
 						added++
+						acctAdded++
 					} else {
 						skipped++
+						acctSkipped++
 					}
 				} else {
 					skipped++
+					acctSkipped++
 				}
 
 			} else {
@@ -341,6 +363,7 @@ func (s *Syncer) run() {
 				if ref != "" {
 					if _, done := s.state.ImportedRefs[ref]; done {
 						skipped++
+						acctSkipped++
 						continue
 					}
 				}
@@ -370,6 +393,7 @@ func (s *Syncer) run() {
 							}
 						}
 						updated++
+						acctUpdated++
 					} else {
 						if err := s.state.DeletePending(pendingKey, s.st); err != nil {
 							log.Printf("DeletePending: %v", err)
@@ -390,6 +414,7 @@ func (s *Syncer) run() {
 						}
 						if wasCreated {
 							added++
+							acctAdded++
 						}
 					}
 
@@ -410,12 +435,19 @@ func (s *Syncer) run() {
 							}
 						}
 						added++
+						acctAdded++
 					} else {
 						skipped++
+						acctSkipped++
 					}
 				}
 			}
 		}
+		importSpan.SetAttributes(
+			attribute.Int("added", acctAdded),
+			attribute.Int("confirmed", acctUpdated),
+			attribute.Int("skipped", acctSkipped),
+		)
 		importSpan.End()
 	}
 
@@ -449,16 +481,21 @@ func (s *Syncer) run() {
 	}
 	rulesSpan.End()
 
-	_, commitSpan := tracer.Start(ctx, "actual.commit")
-	if err := s.ac.Commit(); err != nil {
+	if err := s.ac.Commit(ctx); err != nil {
 		log.Printf("Actual commit error: %v", err)
-		commitSpan.RecordError(err)
-		commitSpan.SetStatus(codes.Error, "commit failed")
+		span.RecordError(err)
 		if s.met != nil {
 			s.met.commitErrors.Add(ctx, 1)
 		}
 	}
-	commitSpan.End()
+
+	span.SetAttributes(
+		attribute.Int("total_added", added),
+		attribute.Int("total_confirmed", updated),
+		attribute.Int("total_skipped", skipped),
+		attribute.Int("accounts_synced", len(bankAccounts)-fetchFailed),
+		attribute.Int("accounts_failed", fetchFailed),
+	)
 
 	if s.met != nil {
 		s.met.txAdded.Add(ctx, int64(added))
@@ -471,7 +508,7 @@ func (s *Syncer) run() {
 		log.Printf("Failed to save state: %v", err)
 	}
 
-	go checkForUpdate(s.st)
+	go checkForUpdate(ctx, s.st)
 }
 
 // mustEnv returns the value of the environment variable key, or terminates the
