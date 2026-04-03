@@ -69,6 +69,29 @@ func TestEffectiveUID_allEmpty(t *testing.T) {
 	}
 }
 
+func TestMaskedIBAN_normal(t *testing.T) {
+	a := SessionAccount{IBAN: "DE89370400440532013000"}
+	got := a.MaskedIBAN()
+	want := "DE89**************3000"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestMaskedIBAN_short(t *testing.T) {
+	a := SessionAccount{IBAN: "DE123456"}
+	if got := a.MaskedIBAN(); got != "DE123456" {
+		t.Errorf("got %q, want DE123456 (no masking for 8 chars)", got)
+	}
+}
+
+func TestMaskedIBAN_empty(t *testing.T) {
+	a := SessionAccount{}
+	if got := a.MaskedIBAN(); got != "" {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
 // --- GetASPSPs --------------------------------------------------------------
 
 func TestGetASPSPs_success(t *testing.T) {

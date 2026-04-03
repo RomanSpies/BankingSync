@@ -17,7 +17,7 @@ bankingsync connects to your bank via PSD2 open banking and imports transactions
 ## Why bankingsync
 
 - **Broad bank coverage** — works with any bank supported by [Enable Banking](https://enablebanking.com)'s PSD2 integration across Europe
-- **Connect all your accounts** — add as many bank connections as you need, each mapped to its own Actual Budget account
+- **Connect all your accounts** — add as many bank connections as you need, each mapped to its own Actual Budget account (e.g. Revolut → "Revolut", N26 → "N26")
 - **No strings attached** — fully open source under AGPL-3.0, no licence keys, no paywalls, no usage caps
 - **Your data stays yours** — transactions travel directly from Enable Banking to your machine, nothing is routed through third-party servers
 - **Read-only access** — bankingsync uses PSD2 read-only consent, it cannot initiate payments or modify your bank account in any way
@@ -25,7 +25,7 @@ bankingsync connects to your bank via PSD2 open banking and imports transactions
 - **Built-in deduplication** — transaction references are persisted so re-syncing the same window never produces duplicates
 - **Multi-currency aware** — foreign currency transactions are recorded at the settled amount in your account's base currency
 - **Rules run automatically** — any categorisation or payee rules you have configured in Actual Budget are applied to every new transaction on import
-- **Session expiry warnings** — optional email notifications alert you before a bank connection needs to be re-authorised
+- **Email notifications** — get alerted on sync failures and before a bank session needs to be re-authorised, with a test email button to verify your setup
 - **TLS out of the box** — a self-signed certificate is generated on first start so the web UI is always served over HTTPS
 - **Full observability** — ship OpenTelemetry metrics and traces to your collector, and continuous profiling data to Grafana Pyroscope
 - **Minimal footprint** — single Go binary, single Docker container, SQLite for storage, zero runtime dependencies
@@ -43,7 +43,8 @@ bankingsync (on your machine)
    |--- Writes new transactions to Actual Budget
    |--- Promotes pending transactions to cleared when they settle
    |--- Applies your Actual Budget rules to new transactions
-   |--- Sends an alert email if a session is expiring
+   |--- Sends an alert email if anything goes wrong or a session is expiring
+   |--- Logs the result to the sync history
    v
 Your Actual Budget instance
 ```
@@ -111,16 +112,17 @@ Open **https://localhost:8443** (accept the self-signed cert warning).
 If bankingsync is on a remote machine:
 
 ```bash
-ssh -L 8443:localhost:8443 yourserver
+ssh -L 8443:[DOCKER_CONTAINER_IP]:8443 yourserver
 ```
 
-The web UI walks you through three steps:
+The web UI walks you through four steps:
 
 1. **Setup** — upload your `private.pem` and enter your Enable Banking Application ID
 2. **Connect** — pick your country and bank, complete the OAuth flow
-3. **Status** — see your connected accounts and watch the first sync run
+3. **Pick Account** — choose which bank sub-account to sync (showing IBAN, owner, and currency when available), which Actual Budget account to import into, and from which date to start importing
+4. **Status** — see your connected accounts, sync history, and watch the first sync run
 
-That's it. bankingsync syncs automatically from here on. Connect additional banks any time from the Connect page.
+That's it. bankingsync syncs automatically from here on. Connect additional banks any time from the Connect page — each one maps to a different Actual Budget account.
 
 ## Configuration
 
@@ -131,12 +133,12 @@ All configuration is via environment variables. Only three are required.
 | `ACTUAL_URL` | Yes | — | URL of your Actual Budget instance |
 | `ACTUAL_PASSWORD` | Yes | — | Actual Budget server password |
 | `ACTUAL_SYNC_ID` | Yes | — | Budget file sync ID |
-| `ACTUAL_ACCOUNT` | No | `Revolut` | Account name in Actual to import into |
+| `ACTUAL_ACCOUNT` | No | `Revolut` | Default Actual Budget account name (used as the pre-filled value when connecting a new bank; each bank can be mapped to a different account via the web UI) |
 | `EB_APPLICATION_ID` | No | — | Enable Banking application ID (locks the field in the UI if set) |
 | `SYNC_INTERVAL_HOURS` | No | `6` | How often to sync |
 | `ACCOUNT_HOLDER_NAME` | No | — | Your name(s) as they appear on transactions, comma-separated. Suppresses self-transfers from appearing as payees. |
 | `WEB_ADDR` | No | `:8443` | Web UI listen address |
-| `NOTIFY_EMAIL` | No | — | Email for session expiry warnings |
+| `NOTIFY_EMAIL` | No | — | Email for sync failure alerts and session expiry warnings |
 | `SMTP_HOST` | No | `smtp.gmail.com` | SMTP server |
 | `SMTP_PORT` | No | `587` | SMTP port |
 | `SMTP_USER` | No | — | SMTP username |
@@ -152,7 +154,7 @@ All state lives in a single Docker volume mounted at `/data`.
 
 | Path | Description |
 |---|---|
-| `/data/bankingsync.db` | SQLite database — settings, bank accounts, sync state, transaction refs |
+| `/data/bankingsync.db` | SQLite database — settings, bank accounts, sync log, sync state, transaction refs |
 | `/data/tls.crt`, `/data/tls.key` | TLS certificate and key — auto-generated on first start |
 | `/data/private.pem` | Enable Banking private key — optional alternative to uploading via the web UI |
 
@@ -164,9 +166,10 @@ To use your own TLS certificate, place it at `/data/tls.crt` and `/data/tls.key`
 |---|---|---|
 | Setup | `/setup` | Upload PEM file and set Application ID |
 | Connect | `/connect` | Browse banks by country, start OAuth, add a bank account |
-| Pick Account | `/pick-account` | Choose a sub-account (when a bank returns multiple) |
-| Status | `/status` | View accounts, session expiry, last sync; trigger sync, renew or remove accounts |
-| Health | `/health` | Liveness probe (`200 OK`) |
+| Pick Account | `/pick-account` | Choose a sub-account (shows IBAN, owner, currency), set the target Actual Budget account and sync start date |
+| Status | `/status` | View accounts, sync history, trigger sync, test email, reset sync, renew or remove accounts |
+| Test Email | `POST /test-email` | Send a test email to verify SMTP configuration |
+| Health | `/health` | Returns JSON with status (`ok`/`degraded`/`unhealthy`), version, connected accounts, expiring sessions, last sync info. HTTP 503 when unhealthy. |
 
 ## Session renewal
 

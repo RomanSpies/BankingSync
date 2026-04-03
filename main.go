@@ -21,7 +21,10 @@ import (
 	"bankingsync/web"
 )
 
-const banner = `
+// Version is set at build time via -ldflags "-X main.Version=...".
+var Version = "dev"
+
+const bannerArt = `
  __________                                 _________      .__
  \______   \ ____   _____ _____    ____    /   _____/_____ |__| ____   ______
   |       _//  _ \ /     \\__  \  /    \   \_____  \\____ \|  |/ __ \ /  ___/
@@ -29,10 +32,13 @@ const banner = `
   |____|_  /\____/|__|_|  (____  /___|  / /_______  /   __/|__|\___  >____  >
          \/             \/     \/     \/          \/|__|           \/     \/
   Roman Spies - Licensed under the GNU AFFERO GENERAL PUBLIC LICENSE, v3.
+  https://github.com/RomanSpies/BankingSync
 `
 
 func main() {
-	fmt.Print(banner)
+	fmt.Print(bannerArt)
+	log.Printf("Version %s", Version)
+	web.AppVersion = Version
 	syncHours := envInt("SYNC_INTERVAL_HOURS", 6)
 	log.Printf("Starting scheduler (every %dh)", syncHours)
 
@@ -42,7 +48,7 @@ func main() {
 	}
 	defer s.st.Close()
 
-	webSrv, err := web.New(s.st, s.eb, s.run, web.TemplateFS)
+	webSrv, err := web.New(s.st, s.eb, s.run, sendTestEmail, web.TemplateFS)
 	if err != nil {
 		log.Fatalf("Web server init: %v", err)
 	}
@@ -141,11 +147,26 @@ func (s *Syncer) run() {
 
 	start := time.Now()
 	status := "success"
+	syncMessage := ""
+	added, updated, skipped := 0, 0, 0
+	var syncErrors []string
 	defer func() {
 		elapsed := time.Since(start).Seconds()
 		if s.met != nil {
 			s.met.syncRuns.Add(ctx, 1, metric.WithAttributes(attribute.String("status", status)))
 			s.met.syncDuration.Record(ctx, elapsed)
+		}
+		if len(syncErrors) > 0 {
+			syncMessage = strings.Join(syncErrors, "; ")
+			var body strings.Builder
+			body.WriteString(fmt.Sprintf("BankingSync encountered %d error(s) during sync.\n\n", len(syncErrors)))
+			for _, e := range syncErrors {
+				body.WriteString("- " + e + "\n")
+			}
+			sendEmail("BankingSync: sync errors", body.String())
+		}
+		if _, err := s.st.AddSyncLog(status, added, updated, skipped, elapsed, syncMessage); err != nil {
+			log.Printf("Failed to save sync log: %v", err)
 		}
 		log.Printf("Sync finished in %.1fs (status=%s)", elapsed, status)
 	}()
@@ -165,69 +186,6 @@ func (s *Syncer) run() {
 		webAddr = "https://localhost:8443"
 	}
 
-	var dateFrom time.Time
-	if s.state.LastSyncDate != "" {
-		if d, err := time.Parse("2006-01-02", s.state.LastSyncDate); err == nil {
-			dateFrom = d
-		}
-	}
-	if dateFrom.IsZero() {
-		dateFrom = time.Now().UTC().AddDate(0, 0, -30)
-		log.Println("First run: fetching last 30 days")
-	}
-
-	if earliest, ok := s.state.EarliestPendingDate(); ok && earliest.Before(dateFrom) {
-		log.Printf("Extending fetch window to %s to cover outstanding pendings",
-			earliest.Format("2006-01-02"))
-		dateFrom = earliest
-	}
-
-	fetchStart := time.Now()
-	_, fetchSpan := tracer.Start(ctx, "enable_banking.fetch_transactions",
-		trace.WithAttributes(attribute.Int("account_count", len(bankAccounts))),
-	)
-	var rawTxns []enablebanking.Transaction
-	for _, acct := range bankAccounts {
-		if t, err := time.Parse(time.RFC3339, acct.SessionExpiry); err == nil {
-			daysLeft := int(time.Until(t).Hours() / 24)
-			if daysLeft < 7 {
-				label := acct.BankName
-				if label == "" {
-					label = acct.AccountUID
-				}
-				log.Printf("WARNING: session for %s expires in %d days. Renew via %s", label, daysLeft, webAddr)
-				sendEmail(
-					fmt.Sprintf("BankingSync: %s session expires in %d days", label, daysLeft),
-					fmt.Sprintf("Your Enable Banking session for %s expires in %d days.\n\nRenew it at: %s\n", label, daysLeft, webAddr),
-				)
-			}
-		}
-		txns, err := s.eb.FetchTransactions(acct.AccountUID, dateFrom)
-		if err != nil {
-			log.Printf("Enable Banking error (%s): %v", acct.AccountUID, err)
-			status = "fetch_error"
-			span.RecordError(err)
-			continue
-		}
-		rawTxns = append(rawTxns, txns...)
-	}
-	fetchSpan.End()
-	if s.met != nil {
-		s.met.fetchDuration.Record(ctx, time.Since(fetchStart).Seconds())
-	}
-	if len(rawTxns) == 0 && status == "fetch_error" {
-		span.SetStatus(codes.Error, "all fetches failed")
-		return
-	}
-
-	if len(rawTxns) == 0 {
-		log.Println("No new transactions")
-		if err := s.state.SetLastSyncDate(time.Now().UTC().Format("2006-01-02"), s.st); err != nil {
-			log.Printf("Failed to save state: %v", err)
-		}
-		return
-	}
-
 	if err := s.state.PruneImportedRefs(s.st); err != nil {
 		log.Printf("Prune imported refs: %v", err)
 	}
@@ -239,121 +197,203 @@ func (s *Syncer) run() {
 		log.Printf("Actual error: %v", connErr)
 		span.RecordError(connErr)
 		span.SetStatus(codes.Error, "connection failed")
+		status = "error"
+		syncErrors = append(syncErrors, fmt.Sprintf("Actual Budget connection: %v", connErr))
 		return
 	}
-
-	accountName := envOr("ACTUAL_ACCOUNT", "Revolut")
-	account, err := s.ac.GetOrCreateAccount(accountName)
-	if err != nil {
-		log.Printf("Actual error (account): %v", err)
-		return
-	}
-
-	existing, err := s.ac.GetTransactions(account.ID)
-	if err != nil {
-		log.Printf("Actual error (transactions): %v", err)
-		return
-	}
-
-	alreadyMatched := make([]*actual.Transaction, len(existing))
-	copy(alreadyMatched, existing)
 
 	var newlyTouched []*actual.Transaction
-	added, updated, skipped := 0, 0, 0
+	fetchFailed := 0
 
-	_, importSpan := tracer.Start(ctx, "import.transactions_batch",
-		trace.WithAttributes(attribute.Int("txn_count", len(rawTxns))),
-	)
-	for _, txn := range rawTxns {
-		status := txn.Status
-		if status == "" {
-			status = "BOOK"
-		}
-		date := txn.Date
-		amountCents := txn.AmountCents
-		payee := txn.Payee
-		notes := txn.Notes
-		ref := txn.EntryRef
-		var pendingKey string
-		if ref != "" {
-			pendingKey = ref
-		} else {
-			pendingKey = fmt.Sprintf("%s|%s", date.Format("2006-01-02"), centsToDecimal(amountCents))
+	for _, acct := range bankAccounts {
+		label := acct.BankName
+		if label == "" {
+			label = acct.AccountUID
 		}
 
-		log.Printf("Txn: %s | %s | %s | %s", status, date.Format("2006-01-02"), centsToDecimal(amountCents), payee)
-
-		if status == "PDNG" {
-			if _, exists := s.state.PendingMap[pendingKey]; !exists {
-				t, wasCreated, err := s.ac.ReconcileTransaction(
-					date, account, payee, notes, amountCents, false, ref, payee, alreadyMatched,
+		if t, err := time.Parse(time.RFC3339, acct.SessionExpiry); err == nil {
+			daysLeft := int(time.Until(t).Hours() / 24)
+			if daysLeft < 7 {
+				log.Printf("WARNING: session for %s expires in %d days. Renew via %s", label, daysLeft, webAddr)
+				sendEmail(
+					fmt.Sprintf("BankingSync: %s session expires in %d days", label, daysLeft),
+					fmt.Sprintf("Your Enable Banking session for %s expires in %d days.\n\nRenew it at: %s\n", label, daysLeft, webAddr),
 				)
-				if err != nil {
-					log.Printf("reconcile_transaction failed (%v), falling back to create_transaction", err)
-					t, err = s.ac.CreateTransaction(date, account, payee, notes, amountCents, false, ref, payee)
+			}
+		}
+
+		var dateFrom time.Time
+		if acct.StartSyncDate != "" {
+			if d, err := time.Parse("2006-01-02", acct.StartSyncDate); err == nil {
+				dateFrom = d
+			}
+		}
+		if dateFrom.IsZero() && s.state.LastSyncDate != "" {
+			if d, err := time.Parse("2006-01-02", s.state.LastSyncDate); err == nil {
+				dateFrom = d
+			}
+		}
+		if dateFrom.IsZero() {
+			dateFrom = time.Now().UTC().AddDate(0, 0, -30)
+		}
+
+		if earliest, ok := s.state.EarliestPendingDate(); ok && earliest.Before(dateFrom) {
+			dateFrom = earliest
+		}
+
+		fetchStart := time.Now()
+		_, fetchSpan := tracer.Start(ctx, "enable_banking.fetch_transactions",
+			trace.WithAttributes(attribute.String("bank", label)),
+		)
+		rawTxns, err := s.eb.FetchTransactions(acct.AccountUID, dateFrom)
+		fetchSpan.End()
+		if s.met != nil {
+			s.met.fetchDuration.Record(ctx, time.Since(fetchStart).Seconds())
+		}
+		if err != nil {
+			log.Printf("Enable Banking error (%s): %v", label, err)
+			span.RecordError(err)
+			syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", label, err))
+			fetchFailed++
+			continue
+		}
+
+		if len(rawTxns) == 0 {
+			log.Printf("No new transactions for %s", label)
+			continue
+		}
+
+		accountName := acct.ActualAccount
+		if accountName == "" {
+			accountName = envOr("ACTUAL_ACCOUNT", "Revolut")
+		}
+		account, err := s.ac.GetOrCreateAccount(accountName)
+		if err != nil {
+			log.Printf("Actual error (account %s): %v", accountName, err)
+			syncErrors = append(syncErrors, fmt.Sprintf("%s: account %q: %v", label, accountName, err))
+			continue
+		}
+
+		existing, err := s.ac.GetTransactions(account.ID)
+		if err != nil {
+			log.Printf("Actual error (transactions %s): %v", accountName, err)
+			syncErrors = append(syncErrors, fmt.Sprintf("%s: transactions: %v", label, err))
+			continue
+		}
+
+		alreadyMatched := make([]*actual.Transaction, len(existing))
+		copy(alreadyMatched, existing)
+
+		_, importSpan := tracer.Start(ctx, "import.transactions_batch",
+			trace.WithAttributes(
+				attribute.String("bank", label),
+				attribute.Int("txn_count", len(rawTxns)),
+			),
+		)
+		for _, txn := range rawTxns {
+			txnStatus := txn.Status
+			if txnStatus == "" {
+				txnStatus = "BOOK"
+			}
+			date := txn.Date
+			amountCents := txn.AmountCents
+			payee := txn.Payee
+			notes := txn.Notes
+			ref := txn.EntryRef
+			var pendingKey string
+			if ref != "" {
+				pendingKey = ref
+			} else {
+				pendingKey = fmt.Sprintf("%s|%s", date.Format("2006-01-02"), centsToDecimal(amountCents))
+			}
+
+			log.Printf("[%s] Txn: %s | %s | %s | %s", label, txnStatus, date.Format("2006-01-02"), centsToDecimal(amountCents), payee)
+
+			if txnStatus == "PDNG" {
+				if _, exists := s.state.PendingMap[pendingKey]; !exists {
+					t, wasCreated, err := s.ac.ReconcileTransaction(
+						date, account, payee, notes, amountCents, false, ref, payee, alreadyMatched,
+					)
 					if err != nil {
-						log.Printf("Skipping transaction: %v | %+v", err, txn)
-						continue
+						log.Printf("reconcile_transaction failed (%v), falling back to create_transaction", err)
+						t, err = s.ac.CreateTransaction(date, account, payee, notes, amountCents, false, ref, payee)
+						if err != nil {
+							log.Printf("Skipping transaction: %v | %+v", err, txn)
+							continue
+						}
+						wasCreated = true
 					}
-					wasCreated = true
-				}
-				alreadyMatched = append(alreadyMatched, t)
-				if wasCreated {
-					if err := s.state.SetPending(pendingKey, t.ID, date.Format("2006-01-02"), s.st); err != nil {
-						log.Printf("SetPending: %v", err)
+					alreadyMatched = append(alreadyMatched, t)
+					if wasCreated {
+						if err := s.state.SetPending(pendingKey, t.ID, date.Format("2006-01-02"), s.st); err != nil {
+							log.Printf("SetPending: %v", err)
+						}
+						added++
+					} else {
+						skipped++
 					}
-					added++
-					log.Printf("Imported pending: %s | %s | %s",
-						date.Format("2006-01-02"), centsToDecimal(amountCents), payee)
 				} else {
 					skipped++
 				}
+
 			} else {
-				skipped++
-			}
 
-		} else {
-
-			if ref != "" {
-				if _, done := s.state.ImportedRefs[ref]; done {
-					skipped++
-					log.Printf("Skipped already-imported: %s | %s | %s",
-						date.Format("2006-01-02"), centsToDecimal(amountCents), payee)
-					continue
-				}
-			}
-
-			if pendingVal, inPending := s.state.PendingMap[pendingKey]; inPending {
-				txnID, _ := splitPendingVal(pendingVal)
-				var existingTxn *actual.Transaction
-				for _, t := range alreadyMatched {
-					if t.ID == txnID {
-						existingTxn = t
-						break
-					}
-				}
-
-				if existingTxn != nil {
-					if err := s.ac.UpdateTransactionCleared(existingTxn); err != nil {
-						log.Printf("Failed to confirm pending: %v", err)
+				if ref != "" {
+					if _, done := s.state.ImportedRefs[ref]; done {
+						skipped++
 						continue
 					}
-					newlyTouched = append(newlyTouched, existingTxn)
-					if err := s.state.DeletePending(pendingKey, s.st); err != nil {
-						log.Printf("DeletePending: %v", err)
-					}
-					if ref != "" {
-						if err := s.state.AddImportedRef(ref, date.Format("2006-01-02"), s.st); err != nil {
-							log.Printf("AddImportedRef: %v", err)
+				}
+
+				if pendingVal, inPending := s.state.PendingMap[pendingKey]; inPending {
+					txnID, _ := splitPendingVal(pendingVal)
+					var existingTxn *actual.Transaction
+					for _, t := range alreadyMatched {
+						if t.ID == txnID {
+							existingTxn = t
+							break
 						}
 					}
-					updated++
-					log.Printf("Confirmed pending: %s | %s | %s",
-						date.Format("2006-01-02"), centsToDecimal(amountCents), payee)
-				} else {
-					if err := s.state.DeletePending(pendingKey, s.st); err != nil {
-						log.Printf("DeletePending: %v", err)
+
+					if existingTxn != nil {
+						if err := s.ac.UpdateTransactionCleared(existingTxn); err != nil {
+							log.Printf("Failed to confirm pending: %v", err)
+							continue
+						}
+						newlyTouched = append(newlyTouched, existingTxn)
+						if err := s.state.DeletePending(pendingKey, s.st); err != nil {
+							log.Printf("DeletePending: %v", err)
+						}
+						if ref != "" {
+							if err := s.state.AddImportedRef(ref, date.Format("2006-01-02"), s.st); err != nil {
+								log.Printf("AddImportedRef: %v", err)
+							}
+						}
+						updated++
+					} else {
+						if err := s.state.DeletePending(pendingKey, s.st); err != nil {
+							log.Printf("DeletePending: %v", err)
+						}
+						t, wasCreated, err := s.ac.ReconcileTransaction(
+							date, account, payee, notes, amountCents, true, ref, payee, alreadyMatched,
+						)
+						if err != nil {
+							log.Printf("Skipping transaction: %v", err)
+							continue
+						}
+						alreadyMatched = append(alreadyMatched, t)
+						newlyTouched = append(newlyTouched, t)
+						if ref != "" {
+							if err := s.state.AddImportedRef(ref, date.Format("2006-01-02"), s.st); err != nil {
+								log.Printf("AddImportedRef: %v", err)
+							}
+						}
+						if wasCreated {
+							added++
+						}
 					}
+
+				} else {
 					t, wasCreated, err := s.ac.ReconcileTransaction(
 						date, account, payee, notes, amountCents, true, ref, payee, alreadyMatched,
 					)
@@ -362,47 +402,28 @@ func (s *Syncer) run() {
 						continue
 					}
 					alreadyMatched = append(alreadyMatched, t)
-					newlyTouched = append(newlyTouched, t)
-					if ref != "" {
-						if err := s.state.AddImportedRef(ref, date.Format("2006-01-02"), s.st); err != nil {
-							log.Printf("AddImportedRef: %v", err)
-						}
-					}
 					if wasCreated {
-						added++
-					}
-				}
-
-			} else {
-				t, wasCreated, err := s.ac.ReconcileTransaction(
-					date, account, payee, notes, amountCents, true, ref, payee, alreadyMatched,
-				)
-				if err != nil {
-					log.Printf("Skipping transaction: %v", err)
-					continue
-				}
-				alreadyMatched = append(alreadyMatched, t)
-				if wasCreated {
-					newlyTouched = append(newlyTouched, t)
-					if ref != "" {
-						if err := s.state.AddImportedRef(ref, date.Format("2006-01-02"), s.st); err != nil {
-							log.Printf("AddImportedRef: %v", err)
+						newlyTouched = append(newlyTouched, t)
+						if ref != "" {
+							if err := s.state.AddImportedRef(ref, date.Format("2006-01-02"), s.st); err != nil {
+								log.Printf("AddImportedRef: %v", err)
+							}
 						}
+						added++
+					} else {
+						skipped++
 					}
-					added++
-				} else {
-					skipped++
 				}
 			}
 		}
+		importSpan.End()
 	}
 
-	importSpan.SetAttributes(
-		attribute.Int("added", added),
-		attribute.Int("updated", updated),
-		attribute.Int("skipped", skipped),
-	)
-	importSpan.End()
+	if fetchFailed == len(bankAccounts) {
+		status = "fetch_error"
+		span.SetStatus(codes.Error, "all fetches failed")
+		return
+	}
 
 	_, rulesSpan := tracer.Start(ctx, "rules.apply")
 	rules, err := s.ac.LoadRules()
@@ -449,6 +470,8 @@ func (s *Syncer) run() {
 	if err := s.state.SetLastSyncDate(time.Now().UTC().Format("2006-01-02"), s.st); err != nil {
 		log.Printf("Failed to save state: %v", err)
 	}
+
+	go checkForUpdate(s.st)
 }
 
 // mustEnv returns the value of the environment variable key, or terminates the

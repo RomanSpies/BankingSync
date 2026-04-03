@@ -26,6 +26,8 @@ type BankAccount struct {
 	AccountUID    string
 	BankName      string
 	BankCountry   string
+	ActualAccount string
+	StartSyncDate string
 	SessionExpiry string
 	CreatedAt     string
 }
@@ -70,7 +72,9 @@ func (s *Store) migrate() error {
 			account_uid    TEXT NOT NULL,
 			bank_name      TEXT NOT NULL,
 			bank_country   TEXT NOT NULL,
-			session_expiry TEXT NOT NULL DEFAULT '',
+			actual_account  TEXT NOT NULL DEFAULT '',
+			start_sync_date TEXT NOT NULL DEFAULT '',
+			session_expiry  TEXT NOT NULL DEFAULT '',
 			created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 		);
 		CREATE TABLE IF NOT EXISTS imported_refs (
@@ -81,8 +85,24 @@ func (s *Store) migrate() error {
 			key    TEXT PRIMARY KEY,
 			txn_id TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS sync_log (
+			id           INTEGER PRIMARY KEY AUTOINCREMENT,
+			ran_at       TEXT NOT NULL DEFAULT (datetime('now')),
+			status       TEXT NOT NULL DEFAULT 'success',
+			tx_added     INTEGER NOT NULL DEFAULT 0,
+			tx_confirmed INTEGER NOT NULL DEFAULT 0,
+			tx_skipped   INTEGER NOT NULL DEFAULT 0,
+			duration_sec REAL NOT NULL DEFAULT 0,
+			message      TEXT NOT NULL DEFAULT ''
+		);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Migrations: add columns for existing databases.
+	s.db.Exec(`ALTER TABLE bank_accounts ADD COLUMN actual_account TEXT NOT NULL DEFAULT ''`)
+	s.db.Exec(`ALTER TABLE bank_accounts ADD COLUMN start_sync_date TEXT NOT NULL DEFAULT ''`)
+	return nil
 }
 
 // importLegacyStateJSON migrates /data/state.json into the database on first run.
@@ -119,8 +139,8 @@ func (s *Store) importLegacyStateJSON() error {
 		_ = tx.QueryRow("SELECT COUNT(*) FROM bank_accounts").Scan(&count)
 		if count == 0 {
 			_, err = tx.Exec(
-				`INSERT INTO bank_accounts (session_id, account_uid, bank_name, bank_country, session_expiry)
-				 VALUES (?, ?, '', '', ?)`,
+				`INSERT INTO bank_accounts (session_id, account_uid, bank_name, bank_country, actual_account, start_sync_date, session_expiry)
+				 VALUES (?, ?, '', '', '', '', ?)`,
 				legacy.EBSessionID, legacy.EBAccountUID, legacy.EBSessionExpiry,
 			)
 			if err != nil {
@@ -202,7 +222,7 @@ func (s *Store) SetLastSyncDate(date string) error {
 // GetAllBankAccounts returns all bank accounts ordered by creation time.
 func (s *Store) GetAllBankAccounts() ([]BankAccount, error) {
 	rows, err := s.db.Query(
-		`SELECT id, session_id, account_uid, bank_name, bank_country, session_expiry, created_at
+		`SELECT id, session_id, account_uid, bank_name, bank_country, actual_account, start_sync_date, session_expiry, created_at
 		 FROM bank_accounts ORDER BY created_at ASC`,
 	)
 	if err != nil {
@@ -212,7 +232,7 @@ func (s *Store) GetAllBankAccounts() ([]BankAccount, error) {
 	var accounts []BankAccount
 	for rows.Next() {
 		var a BankAccount
-		if err := rows.Scan(&a.ID, &a.SessionID, &a.AccountUID, &a.BankName, &a.BankCountry, &a.SessionExpiry, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.SessionID, &a.AccountUID, &a.BankName, &a.BankCountry, &a.ActualAccount, &a.StartSyncDate, &a.SessionExpiry, &a.CreatedAt); err != nil {
 			return nil, err
 		}
 		accounts = append(accounts, a)
@@ -221,11 +241,11 @@ func (s *Store) GetAllBankAccounts() ([]BankAccount, error) {
 }
 
 // AddBankAccount inserts a new bank account and returns its ID.
-func (s *Store) AddBankAccount(sessionID, accountUID, bankName, bankCountry, expiry string) (int64, error) {
+func (s *Store) AddBankAccount(sessionID, accountUID, bankName, bankCountry, actualAccount, startSyncDate, expiry string) (int64, error) {
 	res, err := s.db.Exec(
-		`INSERT INTO bank_accounts (session_id, account_uid, bank_name, bank_country, session_expiry)
-		 VALUES (?, ?, ?, ?, ?)`,
-		sessionID, accountUID, bankName, bankCountry, expiry,
+		`INSERT INTO bank_accounts (session_id, account_uid, bank_name, bank_country, actual_account, start_sync_date, session_expiry)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		sessionID, accountUID, bankName, bankCountry, actualAccount, startSyncDate, expiry,
 	)
 	if err != nil {
 		return 0, err
@@ -239,6 +259,12 @@ func (s *Store) UpdateBankAccountSession(id int64, sessionID, expiry string) err
 		`UPDATE bank_accounts SET session_id = ?, session_expiry = ? WHERE id = ?`,
 		sessionID, expiry, id,
 	)
+	return err
+}
+
+// UpdateBankAccountStartDate sets a new sync start date for an account.
+func (s *Store) UpdateBankAccountStartDate(id int64, startDate string) error {
+	_, err := s.db.Exec(`UPDATE bank_accounts SET start_sync_date = ? WHERE id = ?`, startDate, id)
 	return err
 }
 
@@ -334,4 +360,65 @@ func (s *Store) AllPendingMap() (map[string]string, error) {
 		m[key] = id
 	}
 	return m, rows.Err()
+}
+
+// SyncLog is a row from the sync_log table.
+type SyncLog struct {
+	ID          int64
+	RanAt       string
+	Status      string
+	TxAdded     int
+	TxConfirmed int
+	TxSkipped   int
+	DurationSec float64
+	Message     string
+}
+
+// AddSyncLog records the result of a sync cycle.
+func (s *Store) AddSyncLog(status string, txAdded, txConfirmed, txSkipped int, durationSec float64, message string) (int64, error) {
+	res, err := s.db.Exec(
+		`INSERT INTO sync_log (status, tx_added, tx_confirmed, tx_skipped, duration_sec, message) VALUES (?, ?, ?, ?, ?, ?)`,
+		status, txAdded, txConfirmed, txSkipped, durationSec, message,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// GetSyncLogs returns the most recent sync log entries.
+func (s *Store) GetSyncLogs(limit int) ([]SyncLog, error) {
+	rows, err := s.db.Query(
+		`SELECT id, ran_at, status, tx_added, tx_confirmed, tx_skipped, duration_sec, message
+		 FROM sync_log ORDER BY id DESC LIMIT ?`, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var logs []SyncLog
+	for rows.Next() {
+		var l SyncLog
+		if err := rows.Scan(&l.ID, &l.RanAt, &l.Status, &l.TxAdded, &l.TxConfirmed, &l.TxSkipped, &l.DurationSec, &l.Message); err != nil {
+			return nil, err
+		}
+		logs = append(logs, l)
+	}
+	return logs, rows.Err()
+}
+
+// GetLatestSyncLog returns the most recent sync log entry, or nil if none exist.
+func (s *Store) GetLatestSyncLog() (*SyncLog, error) {
+	var l SyncLog
+	err := s.db.QueryRow(
+		`SELECT id, ran_at, status, tx_added, tx_confirmed, tx_skipped, duration_sec, message
+		 FROM sync_log ORDER BY id DESC LIMIT 1`,
+	).Scan(&l.ID, &l.RanAt, &l.Status, &l.TxAdded, &l.TxConfirmed, &l.TxSkipped, &l.DurationSec, &l.Message)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &l, nil
 }

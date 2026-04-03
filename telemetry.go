@@ -40,7 +40,7 @@ func initTelemetry(s *Syncer, mux *http.ServeMux) func() {
 		resource.Default(),
 		resource.NewWithAttributes("",
 			attribute.String("service.name", "bankingsync"),
-			attribute.String("service.version", "1.0.0"),
+			attribute.String("service.version", Version),
 		),
 	)
 

@@ -58,7 +58,7 @@ services:
       ACTUAL_SYNC_ID: "your-sync-id"
 
       # Optional — defaults shown
-      ACTUAL_ACCOUNT: "Revolut"         # Account name in Actual Budget
+      ACTUAL_ACCOUNT: "Revolut"         # Default Actual Budget account (each bank can override via UI)
       SYNC_INTERVAL_HOURS: "6"          # Sync frequency
       WEB_ADDR: ":8443"                 # Web UI listen address
 
@@ -68,7 +68,7 @@ services:
       # Optional — suppress your own name from appearing as a payee
       # ACCOUNT_HOLDER_NAME: "Jane Doe, Doe Jane"
 
-      # Optional — email alerts when a bank session is about to expire
+      # Optional — email alerts on sync failures and session expiry
       # NOTIFY_EMAIL: ""
       # SMTP_HOST: "smtp.gmail.com"
       # SMTP_PORT: "587"
@@ -109,17 +109,18 @@ If bankingsync is running on a remote machine, tunnel the port first:
 ssh -L 8443:localhost:8443 yourserver
 ```
 
-The web UI guides you through three steps:
+The web UI guides you through four steps:
 
 1. **Setup** — upload your `private.pem` and enter your Enable Banking Application ID
-2. **Connect** — filter by country, select your bank, and complete the OAuth consent flow. If your bank returns multiple sub-accounts you will be asked to pick one.
-3. **Status** — view connected accounts, trigger a manual sync, or renew/remove sessions
+2. **Connect** — filter by country, select your bank, and complete the OAuth consent flow
+3. **Pick Account** — choose which bank sub-account to sync (showing IBAN, owner name, and currency when available), which Actual Budget account to import into, and from which date to start importing (defaults to 30 days ago)
+4. **Status** — view connected accounts and sync history, trigger a manual sync, test your email configuration, or renew/remove sessions
 
-You can connect additional bank accounts at any time from the Connect page.
+You can connect additional bank accounts at any time from the Connect page. Each bank connection maps to a different Actual Budget account.
 
 ### 7. Verify
 
-After the first sync cycle completes, check Actual Budget — your transactions should appear in the configured account. The logs will show:
+After the first sync cycle completes, check Actual Budget — your transactions should appear in the account you selected during setup. The sync history on the Status page shows the result, and the logs will show:
 
 ```
 Done: X added, Y confirmed, Z skipped

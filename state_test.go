@@ -488,7 +488,7 @@ func TestState_PruneImportedRefs_writesThrough(t *testing.T) {
 
 func TestState_Reload_updatesSession(t *testing.T) {
 	st := openStateStore(t)
-	_, _ = st.AddBankAccount("sess-new", "acct-new", "Bank", "DE", "2025-01-01T00:00:00Z")
+	_, _ = st.AddBankAccount("sess-new", "acct-new", "Bank", "DE", "", "", "2025-01-01T00:00:00Z")
 	s := &State{}
 	if err := s.Reload(st); err != nil {
 		t.Fatalf("Reload: %v", err)
@@ -503,7 +503,7 @@ func TestState_Reload_updatesSession(t *testing.T) {
 
 func TestLoadFromStore_withData(t *testing.T) {
 	st := openStateStore(t)
-	_, _ = st.AddBankAccount("sess-1", "acct-1", "Bank", "DE", "2025-12-31T00:00:00Z")
+	_, _ = st.AddBankAccount("sess-1", "acct-1", "Bank", "DE", "", "", "2025-12-31T00:00:00Z")
 	_ = st.SetLastSyncDate("2024-06-01")
 	_ = st.SetPending("REF-1-P", "txn-1|2024-06-01")
 	_ = st.AddImportedRef("REF-1", "2024-06-01")
