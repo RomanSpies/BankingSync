@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,8 +30,36 @@ import (
 // AppVersion is set by the main package at startup.
 var AppVersion string
 
+// SBOMPath is the path to the CycloneDX SBOM file generated during the Docker build.
+var SBOMPath = "/app/sbom.cdx.json"
+
 // SyncTriggerFunc is called when the user requests a manual sync from the web UI.
 type SyncTriggerFunc func()
+
+// CycloneDX types for SBOM parsing.
+type cdxBOM struct {
+	BOMFormat   string         `json:"bomFormat"`
+	SpecVersion string         `json:"specVersion"`
+	Version     int            `json:"version"`
+	Components  []cdxComponent `json:"components"`
+}
+
+type cdxComponent struct {
+	Type     string       `json:"type"`
+	Name     string       `json:"name"`
+	Version  string       `json:"version"`
+	PURL     string       `json:"purl"`
+	Licenses []cdxLicense `json:"licenses"`
+}
+
+type cdxLicenseEntry struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+type cdxLicense struct {
+	License cdxLicenseEntry `json:"license"`
+}
 
 // Server is the embedded web UI and health endpoint server.
 type Server struct {
@@ -82,6 +111,8 @@ func New(st *store.Store, eb *enablebanking.Client, trigger SyncTriggerFunc, tes
 	s.mux.HandleFunc("/sync/now", s.handleSyncNow)
 	s.mux.HandleFunc("/test-email", s.handleTestEmail)
 	s.mux.HandleFunc("/health", s.handleHealth)
+	s.mux.HandleFunc("/sbom", s.handleSBOM)
+	s.mux.HandleFunc("/sbom.json", s.handleSBOMJSON)
 
 	return s, nil
 }
@@ -673,6 +704,93 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpCode)
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Server) handleSBOM(w http.ResponseWriter, r *http.Request) {
+	type sbomRow struct {
+		Name    string
+		Version string
+		License string
+	}
+	type sbomData struct {
+		Title      string
+		Error      string
+		Format     string
+		GoModules  []sbomRow
+		OSPackages []sbomRow
+		Other      []sbomRow
+		Total      int
+	}
+
+	data, err := os.ReadFile(SBOMPath)
+	if err != nil {
+		s.render(w, "sbom.html", sbomData{
+			Title: "SBOM",
+			Error: "SBOM file not available. It is generated during the Docker build.",
+		})
+		return
+	}
+
+	var bom cdxBOM
+	if err := json.Unmarshal(data, &bom); err != nil {
+		s.render(w, "sbom.html", sbomData{
+			Title: "SBOM",
+			Error: "Failed to parse SBOM: " + err.Error(),
+		})
+		return
+	}
+
+	var goMods, osPkgs, other []sbomRow
+	for _, c := range bom.Components {
+		row := sbomRow{
+			Name:    c.Name,
+			Version: c.Version,
+			License: componentLicense(c),
+		}
+		switch {
+		case strings.HasPrefix(c.PURL, "pkg:golang/"):
+			goMods = append(goMods, row)
+		case strings.HasPrefix(c.PURL, "pkg:apk/"):
+			osPkgs = append(osPkgs, row)
+		default:
+			other = append(other, row)
+		}
+	}
+
+	sort.Slice(goMods, func(i, j int) bool { return goMods[i].Name < goMods[j].Name })
+	sort.Slice(osPkgs, func(i, j int) bool { return osPkgs[i].Name < osPkgs[j].Name })
+	sort.Slice(other, func(i, j int) bool { return other[i].Name < other[j].Name })
+
+	s.render(w, "sbom.html", sbomData{
+		Title:      "SBOM",
+		Format:     bom.BOMFormat + " " + bom.SpecVersion,
+		GoModules:  goMods,
+		OSPackages: osPkgs,
+		Other:      other,
+		Total:      len(bom.Components),
+	})
+}
+
+func (s *Server) handleSBOMJSON(w http.ResponseWriter, r *http.Request) {
+	data, err := os.ReadFile(SBOMPath)
+	if err != nil {
+		http.Error(w, "SBOM not available", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", `attachment; filename="sbom.cdx.json"`)
+	w.Write(data)
+}
+
+func componentLicense(c cdxComponent) string {
+	if len(c.Licenses) == 0 {
+		return ""
+	}
+	l := c.Licenses[0].License
+	if l.ID != "" {
+		return l.ID
+	}
+	return l.Name
 }
 
 func (s *Server) getASPSPs() ([]enablebanking.ASPSP, error) {

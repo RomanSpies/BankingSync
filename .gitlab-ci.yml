@@ -170,13 +170,16 @@ docker-build-dev:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
   script:
     - echo "$DOCKER_HUB_TOKEN" | docker login -u "$DOCKER_HUB_USER" --password-stdin
-    - docker build
+    - docker buildx create --driver docker-container --use --name ci-builder 2>/dev/null || docker buildx use ci-builder
+    - docker buildx build
+        --sbom=true
+        --push
         --build-arg VERSION="dev-1.$(date +%-y).$(date +%-V).${CI_PIPELINE_IID}"
         -t "$DOCKER_HUB_USER/bankingsync:dev"
         .
-    - docker push "$DOCKER_HUB_USER/bankingsync:dev"
     - docker logout
   after_script:
+    - docker buildx rm ci-builder 2>/dev/null || true
     - docker logout || true
 
 docker-build-push:
@@ -188,24 +191,20 @@ docker-build-push:
     - VERSION="1.$(date +%-y).$(date +%-V).${CI_PIPELINE_IID}"
     - echo "Building version ${VERSION}"
     - echo "$DOCKER_HUB_TOKEN" | docker login -u "$DOCKER_HUB_USER" --password-stdin
-    - docker build
+    - docker buildx create --driver docker-container --use --name ci-builder 2>/dev/null || docker buildx use ci-builder
+    - docker buildx build
+        --sbom=true
+        --push
         --build-arg VERSION="$VERSION"
         -t "$DOCKER_HUB_USER/bankingsync:$VERSION"
         -t "$DOCKER_HUB_USER/bankingsync:latest"
         .
-    - docker push "$DOCKER_HUB_USER/bankingsync:$VERSION"
-    - docker push "$DOCKER_HUB_USER/bankingsync:latest"
     - docker logout
     - git tag "$VERSION" "$CI_COMMIT_SHA" 2>/dev/null || true
     - git push "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "$VERSION" 2>/dev/null || true
-    - >-
-      curl -s -X PATCH
-      "https://hub.docker.com/v2/repositories/$DOCKER_HUB_USER/bankingsync/"
-      -H "Authorization: Bearer $DOCKER_HUB_PAT"
-      -H "Content-Type: application/json"
-      --data "$(jq -Rs '{"full_description": .}' < README.md)"
-      || true
+
   after_script:
+    - docker buildx rm ci-builder 2>/dev/null || true
     - docker logout || true
 
 gofmt:
