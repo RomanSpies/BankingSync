@@ -1,0 +1,54 @@
+services:
+  bridge-bank:
+    image: romanspies/bankingsync:latest
+    container_name: bridge-bank
+    restart: always
+
+    expose:
+      - "8443"
+
+    volumes:
+      - bridge_bank_data:/data
+
+    environment:
+      ACTUAL_URL: "http://URL"
+      ACTUAL_PASSWORD: "redacted"
+      ACTUAL_SYNC_ID: "redacted"
+      ACTUAL_ACCOUNT: "redacted"
+
+      EB_APPLICATION_ID: "redacted"
+
+      SYNC_INTERVAL_HOURS: "4"
+
+      ACCOUNT_HOLDER_NAME: "YourName YourSurname, YourSurname YourName"
+
+      NOTIFY_EMAIL: ""
+      SMTP_HOST: ""
+      SMTP_PORT: "587"
+      SMTP_USER: ""
+      SMTP_PASS: ""
+
+      OTLP_ENDPOINT: "yourotlp"
+
+      PYROSCOPE_SERVER_ADDRESS: ""
+      PYROSCOPE_BASIC_AUTH_USER: ""
+      PYROSCOPE_BASIC_AUTH_PASSWORD: ""
+
+    networks:
+      actual_net:
+        ipv4_address: 172.30.5.11
+
+
+volumes:
+  bridge_bank_data:
+
+networks:
+  actual_net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-actual
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+          ip_range: 172.30.5.0/24
+          gateway: 172.30.5.254

@@ -1,0 +1,90 @@
+{{template "base.html" .}}
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Dashboard</h1>
+    {{if .LastSync}}<p class="page-sub">Last synced {{.LastSync}}</p>{{end}}
+  </div>
+  <div class="actions">
+    {{if .SyncRunning}}
+    <span class="badge badge-yellow"><span class="dot"></span>Syncing…</span>
+    {{end}}
+    <a class="btn btn-ghost btn-sm" href="/connect">+ Add Bank</a>
+    <button class="btn btn-primary" id="syncBtn" onclick="syncNow(this)">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/>
+        <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
+      </svg>
+      Sync Now
+    </button>
+  </div>
+</div>
+
+{{if .Accounts}}
+<p class="section-label">Connected Accounts</p>
+<div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Bank</th>
+        <th>Country</th>
+        <th>Expires</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Accounts}}
+    <tr>
+      <td class="td-main">{{if .BankName}}{{.BankName}}{{else}}<span style="color:var(--muted)">—</span>{{end}}</td>
+      <td>{{if .BankCountry}}{{.BankCountry}}{{else}}<span style="color:var(--muted)">—</span>{{end}}</td>
+      <td class="mono">{{.SessionExpiry}}</td>
+      <td>
+        {{if .DaysLeft}}
+          {{if lt .DaysLeft 7}}
+            <span class="badge badge-red"><span class="dot"></span>{{.DaysLeft}}d left</span>
+          {{else if lt .DaysLeft 30}}
+            <span class="badge badge-yellow"><span class="dot"></span>{{.DaysLeft}}d left</span>
+          {{else}}
+            <span class="badge badge-green"><span class="dot"></span>{{.DaysLeft}}d left</span>
+          {{end}}
+        {{end}}
+      </td>
+      <td>
+        <div class="actions">
+          <form method="POST" action="/renew">
+            <input type="hidden" name="account_id" value="{{.ID}}">
+            <button type="submit" class="btn btn-ghost btn-sm">Renew</button>
+          </form>
+          <form method="POST" action="/remove-account">
+            <input type="hidden" name="account_id" value="{{.ID}}">
+            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Remove this bank account?')">Remove</button>
+          </form>
+        </div>
+      </td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<div class="empty">
+  <div class="empty-icon">🏦</div>
+  <p class="empty-title">No bank accounts connected</p>
+  <p class="empty-desc">Link a bank account to start syncing transactions to Actual Budget.</p>
+  <a class="btn btn-primary" href="/connect">Connect a Bank</a>
+</div>
+{{end}}
+
+<script>
+function syncNow(btn) {
+  var orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<svg class="spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> Syncing\u2026';
+  fetch('/sync/now', {method:'POST'})
+    .then(function(r){return r.json()})
+    .then(function(){setTimeout(function(){location.reload()},2000)})
+    .catch(function(){btn.disabled=false;btn.innerHTML=orig});
+}
+</script>
+{{end}}

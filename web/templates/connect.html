@@ -1,0 +1,134 @@
+{{template "base.html" .}}
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Connect Bank</h1>
+    <p class="page-sub">Authorise access to your bank via Enable Banking.</p>
+  </div>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  </span>
+  <span>{{.Error}}</span>
+</div>
+{{end}}
+
+{{if .AuthURL}}
+<div class="alert alert-info">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+  </span>
+  <div>
+    <strong>Authorisation required</strong> — open the link below, approve access, then return here. The callback is handled automatically.
+  </div>
+</div>
+
+<div class="code-block" id="authUrl">{{.AuthURL}}</div>
+
+<div class="actions mt">
+  <a class="btn btn-primary" href="{{.AuthURL}}" target="_blank" rel="noopener">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+    </svg>
+    Open in Browser
+  </a>
+  <button class="btn btn-ghost" id="copyBtn" onclick="copyURL()">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+    </svg>
+    Copy URL
+  </button>
+</div>
+
+<script>
+function copyURL() {
+  var btn = document.getElementById('copyBtn');
+  navigator.clipboard.writeText(document.getElementById('authUrl').textContent.trim()).then(function(){
+    btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg> Copied!';
+    setTimeout(function(){
+      btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> Copy URL';
+    }, 2000);
+  });
+}
+</script>
+
+{{else}}
+
+<p class="section-label">Bank selection</p>
+<form method="POST" action="/connect">
+  <div class="field">
+    <label for="countrySelect">Country</label>
+    <select name="bank_country" id="countrySelect" required onchange="filterBanks()">
+      <option value="">— select country —</option>
+      {{range .Countries}}
+      <option value="{{.}}">{{.}}</option>
+      {{end}}
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="bankSelect">Bank</label>
+    <select name="bank_name" id="bankSelect" required>
+      <option value="">— select bank —</option>
+      {{range .Banks}}
+      <option value="{{.Name}}" data-country="{{.Country}}">{{.Name}}</option>
+      {{end}}
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="psuType">Account type</label>
+    <select name="psu_type" id="psuType">
+      <option value="personal">Personal</option>
+      <option value="business">Business</option>
+    </select>
+  </div>
+
+  <div class="mt">
+    <button type="submit" class="btn btn-primary">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M5 12h14M12 5l7 7-7 7"/>
+      </svg>
+      Continue
+    </button>
+  </div>
+</form>
+
+<script>
+function filterBanks() {
+  var country = document.getElementById('countrySelect').value;
+  var opts = document.getElementById('bankSelect').options;
+  for (var i = 0; i < opts.length; i++) {
+    var opt = opts[i];
+    if (!opt.dataset.country) { opt.hidden = false; continue; }
+    opt.hidden = country && opt.dataset.country !== country;
+  }
+  document.getElementById('bankSelect').value = '';
+}
+</script>
+{{end}}
+
+{{if .Accounts}}
+<hr class="divider">
+<p class="section-label">Already connected</p>
+<div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr><th>Bank</th><th>Country</th><th>Expires</th></tr>
+    </thead>
+    <tbody>
+    {{range .Accounts}}
+    <tr>
+      <td class="td-main">{{if .BankName}}{{.BankName}}{{else}}<span style="color:var(--muted)">—</span>{{end}}</td>
+      <td>{{if .BankCountry}}{{.BankCountry}}{{else}}<span style="color:var(--muted)">—</span>{{end}}</td>
+      <td class="mono">{{.SessionExpiry}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+{{end}}

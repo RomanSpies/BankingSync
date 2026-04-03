@@ -1,0 +1,59 @@
+{{template "base.html" .}}
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Setup</h1>
+    <p class="page-sub">Configure your Enable Banking API credentials.</p>
+  </div>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  </span>
+  <span>{{.Error}}</span>
+</div>
+{{end}}
+
+{{if .PEMReady}}
+<div class="alert alert-success">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+  </span>
+  <span>Private key loaded.{{if .AppIDLocked}} Application ID set via environment variable.{{else}} Configuration saved.{{end}}</span>
+</div>
+{{end}}
+
+<form method="POST" action="/setup" enctype="multipart/form-data">
+  <div class="field">
+    <label>Enable Banking Private Key</label>
+    <input type="file" name="pem_file" accept=".pem">
+    {{if .PEMReady}}
+    <p class="field-hint">A key is already stored — upload a new .pem file to replace it.</p>
+    {{else}}
+    <p class="field-hint">Download the .pem file from your Enable Banking developer dashboard.</p>
+    {{end}}
+  </div>
+
+  <div class="field">
+    <label>Application ID</label>
+    {{if .AppIDLocked}}
+    <input type="text" value="{{.AppID}}" disabled>
+    <p class="field-hint">Set via <code style="font-family:var(--mono);font-size:.75rem;color:#a5f3fc;background:var(--bg);padding:.1em .3em;border-radius:3px">EB_APPLICATION_ID</code> environment variable.</p>
+    {{else}}
+    <input type="text" name="app_id" value="{{.AppID}}" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" required>
+    <p class="field-hint">Found in your Enable Banking developer dashboard. The .pem filename is usually the App ID.</p>
+    {{end}}
+  </div>
+
+  <div class="mt">
+    <button type="submit" class="btn btn-primary">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v14a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>
+      </svg>
+      Save &amp; Continue
+    </button>
+  </div>
+</form>
+{{end}}

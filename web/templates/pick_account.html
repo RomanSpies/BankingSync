@@ -1,0 +1,39 @@
+{{template "base.html" .}}
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Select Account</h1>
+    <p class="page-sub">{{.BankName}}{{if .BankCountry}} · {{.BankCountry}}{{end}} returned multiple accounts.</p>
+  </div>
+</div>
+
+<div class="alert alert-info">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+  </span>
+  <span>Choose one account to sync. You can connect additional accounts by repeating the connect flow.</span>
+</div>
+
+<form method="POST" action="/pick-account">
+  <input type="hidden" name="session_id" value="{{.SessionID}}">
+  <input type="hidden" name="bank_name" value="{{.BankName}}">
+  <input type="hidden" name="bank_country" value="{{.BankCountry}}">
+  <input type="hidden" name="expiry" value="{{.Expiry}}">
+
+  <p class="section-label">Available accounts</p>
+
+  {{range .Accounts}}
+  <label class="acct-card">
+    <input type="radio" name="account_uid" value="{{.EffectiveUID}}" required>
+    <span class="acct-uid">{{.EffectiveUID}}</span>
+  </label>
+  {{end}}
+
+  <div class="mt-lg">
+    <button type="submit" class="btn btn-primary">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+      Use this account
+    </button>
+  </div>
+</form>
+{{end}}
