@@ -9,6 +9,7 @@
     {{if .SyncRunning}}
     <span class="badge badge-yellow"><span class="dot"></span>Syncing…</span>
     {{end}}
+    <button class="btn btn-ghost btn-sm" onclick="testEmail(this)">Test Email</button>
     <a class="btn btn-ghost btn-sm" href="/connect">+ Add Bank</a>
     <button class="btn btn-primary" id="syncBtn" onclick="syncNow(this)">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -20,6 +21,15 @@
   </div>
 </div>
 
+{{if .UpdateAvailable}}
+<div class="alert alert-info">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+  </span>
+  <span>Version <strong>{{.UpdateAvailable}}</strong> is available. Update with: <code style="font-family:var(--mono);font-size:.75rem;color:#a5f3fc;background:var(--bg);padding:.1em .3em;border-radius:3px">docker compose pull && docker compose up -d</code></span>
+</div>
+{{end}}
+
 {{if .Accounts}}
 <p class="section-label">Connected Accounts</p>
 <div class="tbl-wrap">
@@ -28,6 +38,7 @@
       <tr>
         <th>Bank</th>
         <th>Country</th>
+        <th>Actual Account</th>
         <th>Expires</th>
         <th>Status</th>
         <th></th>
@@ -38,6 +49,7 @@
     <tr>
       <td class="td-main">{{if .BankName}}{{.BankName}}{{else}}<span style="color:var(--muted)">—</span>{{end}}</td>
       <td>{{if .BankCountry}}{{.BankCountry}}{{else}}<span style="color:var(--muted)">—</span>{{end}}</td>
+      <td>{{if .ActualAccount}}{{.ActualAccount}}{{else}}<span style="color:var(--muted)">—</span>{{end}}</td>
       <td class="mono">{{.SessionExpiry}}</td>
       <td>
         {{if .DaysLeft}}
@@ -55,6 +67,11 @@
           <form method="POST" action="/renew">
             <input type="hidden" name="account_id" value="{{.ID}}">
             <button type="submit" class="btn btn-ghost btn-sm">Renew</button>
+          </form>
+          <form method="POST" action="/reset-sync" onsubmit="return confirmReset(this)">
+            <input type="hidden" name="account_id" value="{{.ID}}">
+            <input type="hidden" name="start_date" value="">
+            <button type="submit" class="btn btn-ghost btn-sm">Reset</button>
           </form>
           <form method="POST" action="/remove-account">
             <input type="hidden" name="account_id" value="{{.ID}}">
@@ -76,7 +93,50 @@
 </div>
 {{end}}
 
+{{if .SyncLogs}}
+<hr class="divider">
+<p class="section-label">Recent Syncs</p>
+<div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Status</th>
+        <th>Added</th>
+        <th>Confirmed</th>
+        <th>Skipped</th>
+        <th>Duration</th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .SyncLogs}}
+    <tr>
+      <td class="mono">{{.RanAt}}</td>
+      <td>
+        {{if eq .Status "success"}}
+          <span class="badge badge-green"><span class="dot"></span>OK</span>
+        {{else}}
+          <span class="badge badge-red"><span class="dot"></span>{{.Status}}</span>
+        {{end}}
+      </td>
+      <td>{{.TxAdded}}</td>
+      <td>{{.TxConfirmed}}</td>
+      <td>{{.TxSkipped}}</td>
+      <td class="mono">{{printf "%.1fs" .DurationSec}}</td>
+    </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}
+
 <script>
+function confirmReset(form) {
+  var d = prompt('Re-import transactions from which date? (YYYY-MM-DD)', new Date(Date.now()-30*86400000).toISOString().slice(0,10));
+  if (!d) return false;
+  form.querySelector('[name=start_date]').value = d;
+  return true;
+}
 function syncNow(btn) {
   var orig = btn.innerHTML;
   btn.disabled = true;
@@ -84,6 +144,18 @@ function syncNow(btn) {
   fetch('/sync/now', {method:'POST'})
     .then(function(r){return r.json()})
     .then(function(){setTimeout(function(){location.reload()},2000)})
+    .catch(function(){btn.disabled=false;btn.innerHTML=orig});
+}
+function testEmail(btn) {
+  var orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = 'Sending\u2026';
+  fetch('/test-email', {method:'POST'})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      btn.innerHTML = d.ok ? 'Sent!' : 'Failed';
+      setTimeout(function(){btn.disabled=false;btn.innerHTML=orig},2500);
+    })
     .catch(function(){btn.disabled=false;btn.innerHTML=orig});
 }
 </script>

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -20,6 +21,9 @@ type SessionAccount struct {
 	UID        string `json:"uid"`
 	AccountUID string `json:"account_uid"`
 	ResourceID string `json:"resource_id"`
+	IBAN       string `json:"iban"`
+	OwnerName  string `json:"owner_name"`
+	Currency   string `json:"currency"`
 }
 
 // EffectiveUID returns the best-available account UID across the three possible field names.
@@ -31,6 +35,14 @@ func (a SessionAccount) EffectiveUID() string {
 		return a.AccountUID
 	}
 	return a.ResourceID
+}
+
+// MaskedIBAN returns the IBAN with the middle portion replaced by asterisks.
+func (a SessionAccount) MaskedIBAN() string {
+	if len(a.IBAN) <= 8 {
+		return a.IBAN
+	}
+	return a.IBAN[:4] + strings.Repeat("*", len(a.IBAN)-8) + a.IBAN[len(a.IBAN)-4:]
 }
 
 // SessionResponse is the decoded reply from POST /sessions.

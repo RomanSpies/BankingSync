@@ -3,15 +3,24 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">Select Account</h1>
-    <p class="page-sub">{{.BankName}}{{if .BankCountry}} · {{.BankCountry}}{{end}} returned multiple accounts.</p>
+    <p class="page-sub">{{.BankName}}{{if .BankCountry}} · {{.BankCountry}}{{end}}</p>
   </div>
 </div>
+
+{{if .Error}}
+<div class="alert alert-error">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  </span>
+  <span>{{.Error}}</span>
+</div>
+{{end}}
 
 <div class="alert alert-info">
   <span class="alert-icon">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
   </span>
-  <span>Choose one account to sync. You can connect additional accounts by repeating the connect flow.</span>
+  <span>Choose the bank account to sync and the Actual Budget account it should import into.</span>
 </div>
 
 <form method="POST" action="/pick-account">
@@ -25,9 +34,27 @@
   {{range .Accounts}}
   <label class="acct-card">
     <input type="radio" name="account_uid" value="{{.EffectiveUID}}" required>
-    <span class="acct-uid">{{.EffectiveUID}}</span>
+    <div>
+      {{if .IBAN}}<div style="font-size:.88rem;font-weight:500;color:var(--text)">{{.MaskedIBAN}}</div>{{end}}
+      <span class="acct-uid">{{.EffectiveUID}}</span>
+      {{if or .OwnerName .Currency}}<div style="font-size:.75rem;color:var(--muted);margin-top:.15rem">{{.OwnerName}}{{if and .OwnerName .Currency}} · {{end}}{{.Currency}}</div>{{end}}
+    </div>
   </label>
   {{end}}
+
+  <hr class="divider">
+
+  <div class="field">
+    <label>Actual Budget Account</label>
+    <input type="text" name="actual_account" value="{{.DefaultAccount}}" placeholder="e.g. Revolut, N26, Main" required>
+    <p class="field-hint">The account name in Actual Budget where transactions from this bank will be imported.</p>
+  </div>
+
+  <div class="field">
+    <label>Import transactions from</label>
+    <input type="date" name="start_sync_date" value="{{.DefaultStartDate}}">
+    <p class="field-hint">Transactions from this date onwards will be imported on the first sync. Leave as-is for the last 30 days.</p>
+  </div>
 
   <div class="mt-lg">
     <button type="submit" class="btn btn-primary">

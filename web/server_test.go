@@ -37,7 +37,7 @@ func noopEB() *enablebanking.Client {
 func newTestServer(t *testing.T) (*Server, *store.Store) {
 	t.Helper()
 	st := openTestStore(t)
-	srv, err := New(st, noopEB(), func() {}, TemplateFS)
+	srv, err := New(st, noopEB(), func() {}, nil, TemplateFS)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -64,10 +64,23 @@ func post(t *testing.T, srv *Server, path string, form url.Values) *httptest.Res
 // --- handleHealth -----------------------------------------------------------
 
 func TestHandleHealth_returns200(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, st := newTestServer(t)
+	_, _ = st.AddBankAccount("sess", "acct", "Bank", "DE", "", "", "2027-01-01T00:00:00Z")
+	_ = st.SetLastSyncDate("2026-04-01")
 	w := get(t, srv, "/health")
 	if w.Code != http.StatusOK {
 		t.Errorf("got %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `"status":"ok"`) {
+		t.Errorf("expected status ok, got %s", w.Body.String())
+	}
+}
+
+func TestHandleHealth_noAccounts_returns503(t *testing.T) {
+	srv, _ := newTestServer(t)
+	w := get(t, srv, "/health")
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("got %d, want 503", w.Code)
 	}
 }
 
@@ -99,7 +112,7 @@ func TestHandleIndex_setupDone_noAccounts_redirectsToConnect(t *testing.T) {
 func TestHandleIndex_connected_redirectsToStatus(t *testing.T) {
 	srv, st := newTestServer(t)
 	_ = st.SetSetting("eb_pem_content", "pem-data")
-	_, _ = st.AddBankAccount("sess", "acct", "Bank", "DE", "2025-01-01T00:00:00Z")
+	_, _ = st.AddBankAccount("sess", "acct", "Bank", "DE", "", "", "2025-01-01T00:00:00Z")
 	w := get(t, srv, "/")
 	if w.Code != http.StatusFound {
 		t.Errorf("got %d, want 302", w.Code)
@@ -207,7 +220,7 @@ func TestHandleStatus_GET_noAccounts(t *testing.T) {
 
 func TestHandleStatus_GET_withAccount(t *testing.T) {
 	srv, st := newTestServer(t)
-	_, _ = st.AddBankAccount("sess", "acct", "TestBank", "DE", "2026-01-01T00:00:00Z")
+	_, _ = st.AddBankAccount("sess", "acct", "TestBank", "DE", "", "", "2026-01-01T00:00:00Z")
 	w := get(t, srv, "/status")
 	if w.Code != http.StatusOK {
 		t.Errorf("got %d, want 200", w.Code)
@@ -276,6 +289,32 @@ func TestHandlePickAccount_GET_renders(t *testing.T) {
 	}
 }
 
+func TestHandlePickAccount_POST_savesActualAccount(t *testing.T) {
+	srv, st := newTestServer(t)
+	accts := []enablebanking.SessionAccount{{UID: "uid-1"}}
+	data, _ := json.Marshal(accts)
+	_ = st.SetSetting("pending_auth_session_id", "sess-1")
+	_ = st.SetSetting("pending_auth_accounts", string(data))
+	_ = st.SetSetting("pending_auth_expiry", "2027-01-01T00:00:00Z")
+	_ = st.SetSetting("pending_auth_bank_name", "TestBank")
+	_ = st.SetSetting("pending_auth_bank_country", "DE")
+
+	w := post(t, srv, "/pick-account", url.Values{
+		"account_uid":    {"uid-1"},
+		"actual_account": {"MyChecking"},
+	})
+	if w.Code != http.StatusFound {
+		t.Fatalf("got %d, want 302", w.Code)
+	}
+	accounts, _ := st.GetAllBankAccounts()
+	if len(accounts) != 1 {
+		t.Fatalf("expected 1 account, got %d", len(accounts))
+	}
+	if accounts[0].ActualAccount != "MyChecking" {
+		t.Errorf("ActualAccount: got %q, want MyChecking", accounts[0].ActualAccount)
+	}
+}
+
 // --- handleRemoveAccount ----------------------------------------------------
 
 func TestHandleRemoveAccount_GET_returns404(t *testing.T) {
@@ -288,7 +327,7 @@ func TestHandleRemoveAccount_GET_returns404(t *testing.T) {
 
 func TestHandleRemoveAccount_POST_removesAccount(t *testing.T) {
 	srv, st := newTestServer(t)
-	id, _ := st.AddBankAccount("sess", "acct", "Bank", "DE", "2025-01-01T00:00:00Z")
+	id, _ := st.AddBankAccount("sess", "acct", "Bank", "DE", "", "", "2025-01-01T00:00:00Z")
 	w := post(t, srv, "/remove-account", url.Values{"account_id": {fmt.Sprintf("%d", id)}})
 	if w.Code != http.StatusFound {
 		t.Errorf("got %d, want 302", w.Code)
@@ -296,6 +335,32 @@ func TestHandleRemoveAccount_POST_removesAccount(t *testing.T) {
 	accounts, _ := st.GetAllBankAccounts()
 	if len(accounts) != 0 {
 		t.Errorf("expected 0 accounts after remove, got %d", len(accounts))
+	}
+}
+
+// --- handleResetSync --------------------------------------------------------
+
+func TestHandleResetSync_GET_returns404(t *testing.T) {
+	srv, _ := newTestServer(t)
+	w := get(t, srv, "/reset-sync")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("got %d, want 404", w.Code)
+	}
+}
+
+func TestHandleResetSync_POST_updatesStartDate(t *testing.T) {
+	srv, st := newTestServer(t)
+	id, _ := st.AddBankAccount("sess", "acct", "Bank", "DE", "", "", "2025-01-01T00:00:00Z")
+	w := post(t, srv, "/reset-sync", url.Values{
+		"account_id": {fmt.Sprintf("%d", id)},
+		"start_date": {"2025-06-01"},
+	})
+	if w.Code != http.StatusFound {
+		t.Errorf("got %d, want 302", w.Code)
+	}
+	accounts, _ := st.GetAllBankAccounts()
+	if accounts[0].StartSyncDate != "2025-06-01" {
+		t.Errorf("StartSyncDate: got %q, want 2025-06-01", accounts[0].StartSyncDate)
 	}
 }
 
@@ -312,7 +377,7 @@ func TestHandleSyncNow_GET_returns404(t *testing.T) {
 func TestHandleSyncNow_POST_returnsOK(t *testing.T) {
 	st := openTestStore(t)
 	triggered := make(chan struct{}, 1)
-	srv, err := New(st, noopEB(), func() { triggered <- struct{}{} }, TemplateFS)
+	srv, err := New(st, noopEB(), func() { triggered <- struct{}{} }, nil, TemplateFS)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -328,7 +393,7 @@ func TestHandleSyncNow_POST_returnsOK(t *testing.T) {
 func TestHandleSyncNow_POST_alreadyRunning_returnsNotOK(t *testing.T) {
 	st := openTestStore(t)
 	block := make(chan struct{})
-	srv, _ := New(st, noopEB(), func() { <-block }, TemplateFS)
+	srv, _ := New(st, noopEB(), func() { <-block }, nil, TemplateFS)
 
 	// Start first sync (goroutine will block on channel)
 	w1 := post(t, srv, "/sync/now", nil)
@@ -343,6 +408,48 @@ func TestHandleSyncNow_POST_alreadyRunning_returnsNotOK(t *testing.T) {
 	}
 
 	close(block) // unblock the goroutine
+}
+
+// --- handleTestEmail --------------------------------------------------------
+
+func TestHandleTestEmail_GET_returns404(t *testing.T) {
+	srv, _ := newTestServer(t)
+	w := get(t, srv, "/test-email")
+	if w.Code != http.StatusNotFound {
+		t.Errorf("got %d, want 404", w.Code)
+	}
+}
+
+func TestHandleTestEmail_POST_nilFunc_returnsError(t *testing.T) {
+	srv, _ := newTestServer(t)
+	w := post(t, srv, "/test-email", nil)
+	if w.Code != http.StatusOK {
+		t.Errorf("got %d, want 200", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `"ok":false`) {
+		t.Errorf("expected ok:false, got %s", w.Body.String())
+	}
+}
+
+func TestHandleTestEmail_POST_success(t *testing.T) {
+	st := openTestStore(t)
+	srv, _ := New(st, noopEB(), func() {}, func() error { return nil }, TemplateFS)
+	w := post(t, srv, "/test-email", nil)
+	if !strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Errorf("expected ok:true, got %s", w.Body.String())
+	}
+}
+
+func TestHandleTestEmail_POST_failure(t *testing.T) {
+	st := openTestStore(t)
+	srv, _ := New(st, noopEB(), func() {}, func() error { return fmt.Errorf("smtp down") }, TemplateFS)
+	w := post(t, srv, "/test-email", nil)
+	if !strings.Contains(w.Body.String(), `"ok":false`) {
+		t.Errorf("expected ok:false, got %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "smtp down") {
+		t.Errorf("expected error message in response, got %s", w.Body.String())
+	}
 }
 
 // --- handleRenew ------------------------------------------------------------
@@ -492,7 +599,7 @@ func TestIsConnected_falseWhenNoAccounts(t *testing.T) {
 
 func TestIsConnected_trueWhenAccountExists(t *testing.T) {
 	srv, st := newTestServer(t)
-	_, _ = st.AddBankAccount("sess", "acct", "Bank", "DE", "2025-01-01T00:00:00Z")
+	_, _ = st.AddBankAccount("sess", "acct", "Bank", "DE", "", "", "2025-01-01T00:00:00Z")
 	if !srv.isConnected() {
 		t.Error("expected true when account exists")
 	}

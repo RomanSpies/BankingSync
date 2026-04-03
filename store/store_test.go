@@ -113,7 +113,7 @@ func TestGetAllBankAccounts_emptyOnNew(t *testing.T) {
 
 func TestAddBankAccount_andGetAll(t *testing.T) {
 	st := openTestStore(t)
-	id, err := st.AddBankAccount("sess-1", "acct-1", "TestBank", "DE", "2025-01-01T00:00:00Z")
+	id, err := st.AddBankAccount("sess-1", "acct-1", "TestBank", "DE", "", "", "2025-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatalf("AddBankAccount: %v", err)
 	}
@@ -150,8 +150,8 @@ func TestAddBankAccount_andGetAll(t *testing.T) {
 
 func TestGetAllBankAccounts_orderedByCreation(t *testing.T) {
 	st := openTestStore(t)
-	_, _ = st.AddBankAccount("s1", "a1", "Bank1", "DE", "2025-01-01T00:00:00Z")
-	_, _ = st.AddBankAccount("s2", "a2", "Bank2", "FR", "2025-01-01T00:00:00Z")
+	_, _ = st.AddBankAccount("s1", "a1", "Bank1", "DE", "", "", "2025-01-01T00:00:00Z")
+	_, _ = st.AddBankAccount("s2", "a2", "Bank2", "FR", "", "", "2025-01-01T00:00:00Z")
 	accounts, _ := st.GetAllBankAccounts()
 	if len(accounts) != 2 {
 		t.Fatalf("expected 2, got %d", len(accounts))
@@ -166,7 +166,7 @@ func TestGetAllBankAccounts_orderedByCreation(t *testing.T) {
 
 func TestUpdateBankAccountSession(t *testing.T) {
 	st := openTestStore(t)
-	id, _ := st.AddBankAccount("old-sess", "acct", "Bank", "DE", "2025-01-01T00:00:00Z")
+	id, _ := st.AddBankAccount("old-sess", "acct", "Bank", "DE", "", "", "2025-01-01T00:00:00Z")
 	if err := st.UpdateBankAccountSession(id, "new-sess", "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatalf("UpdateBankAccountSession: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestUpdateBankAccountSession(t *testing.T) {
 
 func TestRemoveBankAccount(t *testing.T) {
 	st := openTestStore(t)
-	id, _ := st.AddBankAccount("sess", "acct", "Bank", "DE", "2025-01-01T00:00:00Z")
+	id, _ := st.AddBankAccount("sess", "acct", "Bank", "DE", "", "", "2025-01-01T00:00:00Z")
 	if err := st.RemoveBankAccount(id); err != nil {
 		t.Fatalf("RemoveBankAccount: %v", err)
 	}
@@ -391,5 +391,114 @@ func TestAllPendingMap(t *testing.T) {
 	}
 	if m["k2"] != "v2" {
 		t.Errorf("k2: got %q", m["k2"])
+	}
+}
+
+func TestAddBankAccount_actualAccountRoundtrip(t *testing.T) {
+	st := openTestStore(t)
+	_, _ = st.AddBankAccount("sess", "acct", "Bank", "DE", "MyChecking", "", "2025-01-01T00:00:00Z")
+	accounts, _ := st.GetAllBankAccounts()
+	if accounts[0].ActualAccount != "MyChecking" {
+		t.Errorf("ActualAccount: got %q, want MyChecking", accounts[0].ActualAccount)
+	}
+}
+
+func TestAddBankAccount_startSyncDateRoundtrip(t *testing.T) {
+	st := openTestStore(t)
+	_, _ = st.AddBankAccount("sess", "acct", "Bank", "DE", "", "2025-03-01", "2025-01-01T00:00:00Z")
+	accounts, _ := st.GetAllBankAccounts()
+	if accounts[0].StartSyncDate != "2025-03-01" {
+		t.Errorf("StartSyncDate: got %q, want 2025-03-01", accounts[0].StartSyncDate)
+	}
+}
+
+func TestUpdateBankAccountStartDate(t *testing.T) {
+	st := openTestStore(t)
+	id, _ := st.AddBankAccount("sess", "acct", "Bank", "DE", "", "", "2025-01-01T00:00:00Z")
+	if err := st.UpdateBankAccountStartDate(id, "2025-06-15"); err != nil {
+		t.Fatalf("UpdateBankAccountStartDate: %v", err)
+	}
+	accounts, _ := st.GetAllBankAccounts()
+	if accounts[0].StartSyncDate != "2025-06-15" {
+		t.Errorf("StartSyncDate: got %q, want 2025-06-15", accounts[0].StartSyncDate)
+	}
+}
+
+func TestAddSyncLog_andGetLogs(t *testing.T) {
+	st := openTestStore(t)
+	id, err := st.AddSyncLog("success", 5, 2, 3, 1.5, "")
+	if err != nil {
+		t.Fatalf("AddSyncLog: %v", err)
+	}
+	if id == 0 {
+		t.Error("expected non-zero ID")
+	}
+	logs, err := st.GetSyncLogs(10)
+	if err != nil {
+		t.Fatalf("GetSyncLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("expected 1, got %d", len(logs))
+	}
+	if logs[0].Status != "success" {
+		t.Errorf("Status: got %q", logs[0].Status)
+	}
+	if logs[0].TxAdded != 5 {
+		t.Errorf("TxAdded: got %d", logs[0].TxAdded)
+	}
+	if logs[0].TxConfirmed != 2 {
+		t.Errorf("TxConfirmed: got %d", logs[0].TxConfirmed)
+	}
+}
+
+func TestGetSyncLogs_respectsLimit(t *testing.T) {
+	st := openTestStore(t)
+	for i := 0; i < 5; i++ {
+		_, _ = st.AddSyncLog("success", i, 0, 0, 0.1, "")
+	}
+	logs, _ := st.GetSyncLogs(3)
+	if len(logs) != 3 {
+		t.Errorf("expected 3, got %d", len(logs))
+	}
+}
+
+func TestGetSyncLogs_emptyOnNew(t *testing.T) {
+	st := openTestStore(t)
+	logs, err := st.GetSyncLogs(10)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(logs) != 0 {
+		t.Errorf("expected 0, got %d", len(logs))
+	}
+}
+
+func TestGetLatestSyncLog_returnsNewest(t *testing.T) {
+	st := openTestStore(t)
+	_, _ = st.AddSyncLog("success", 1, 0, 0, 0.1, "first")
+	_, _ = st.AddSyncLog("error", 0, 0, 0, 0.2, "second")
+	l, err := st.GetLatestSyncLog()
+	if err != nil {
+		t.Fatalf("GetLatestSyncLog: %v", err)
+	}
+	if l == nil {
+		t.Fatal("expected non-nil")
+	}
+	if l.Status != "error" {
+		t.Errorf("Status: got %q, want error", l.Status)
+	}
+	if l.Message != "second" {
+		t.Errorf("Message: got %q, want second", l.Message)
+	}
+}
+
+func TestGetLatestSyncLog_nilOnEmpty(t *testing.T) {
+	st := openTestStore(t)
+	l, err := st.GetLatestSyncLog()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if l != nil {
+		t.Errorf("expected nil, got %+v", l)
 	}
 }
