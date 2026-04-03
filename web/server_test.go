@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -433,7 +434,7 @@ func TestHandleTestEmail_POST_nilFunc_returnsError(t *testing.T) {
 
 func TestHandleTestEmail_POST_success(t *testing.T) {
 	st := openTestStore(t)
-	srv, _ := New(st, noopEB(), func() {}, func() error { return nil }, TemplateFS)
+	srv, _ := New(st, noopEB(), func() {}, func(context.Context) error { return nil }, TemplateFS)
 	w := post(t, srv, "/test-email", nil)
 	if !strings.Contains(w.Body.String(), `"ok":true`) {
 		t.Errorf("expected ok:true, got %s", w.Body.String())
@@ -442,7 +443,7 @@ func TestHandleTestEmail_POST_success(t *testing.T) {
 
 func TestHandleTestEmail_POST_failure(t *testing.T) {
 	st := openTestStore(t)
-	srv, _ := New(st, noopEB(), func() {}, func() error { return fmt.Errorf("smtp down") }, TemplateFS)
+	srv, _ := New(st, noopEB(), func() {}, func(context.Context) error { return fmt.Errorf("smtp down") }, TemplateFS)
 	w := post(t, srv, "/test-email", nil)
 	if !strings.Contains(w.Body.String(), `"ok":false`) {
 		t.Errorf("expected ok:false, got %s", w.Body.String())

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 )
 
@@ -45,7 +46,7 @@ func TestFetchLatestVersion_live(t *testing.T) {
 	// This test verifies that the API call succeeds and the response is parsed
 	// correctly. The result may be empty (no version tags yet) or a valid
 	// version string.
-	latest, err := fetchLatestVersion()
+	latest, err := fetchLatestVersion(context.Background())
 	if err != nil {
 		t.Fatalf("fetchLatestVersion: %v", err)
 	}

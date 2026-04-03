@@ -2,12 +2,18 @@ package enablebanking
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ASPSP represents one bank from the Enable Banking /aspsps endpoint.
@@ -52,12 +58,16 @@ type SessionResponse struct {
 }
 
 // GetASPSPs fetches the list of supported banks from the Enable Banking API.
-func (c *Client) GetASPSPs() ([]ASPSP, error) {
+func (c *Client) GetASPSPs(ctx context.Context) ([]ASPSP, error) {
+	tracer := otel.Tracer("bankingsync/enablebanking")
+	ctx, span := tracer.Start(ctx, "enablebanking.get_aspsps")
+	defer span.End()
+
 	headers, err := c.makeHeaders()
 	if err != nil {
 		return nil, fmt.Errorf("makeHeaders: %w", err)
 	}
-	req, err := http.NewRequest(http.MethodGet, c.baseURL+"/aspsps", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/aspsps", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -66,12 +76,17 @@ func (c *Client) GetASPSPs() ([]ASPSP, error) {
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("GET /aspsps: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET /aspsps HTTP %d: %s", resp.StatusCode, body)
+		err := fmt.Errorf("GET /aspsps HTTP %d: %s", resp.StatusCode, body)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 	var data struct {
 		ASPSPs []ASPSP `json:"aspsps"`
@@ -79,13 +94,23 @@ func (c *Client) GetASPSPs() ([]ASPSP, error) {
 	if err := json.Unmarshal(body, &data); err != nil {
 		return nil, fmt.Errorf("decode /aspsps: %w", err)
 	}
+	span.SetAttributes(attribute.Int("bank_count", len(data.ASPSPs)))
 	return data.ASPSPs, nil
 }
 
 // StartAuth initiates the OAuth authorisation flow and returns the redirect URL
 // that the user must open in their browser. Enable Banking will redirect the user
 // to appBaseURL+"/callback" with code and state query parameters on completion.
-func (c *Client) StartAuth(bankName, bankCountry, psuType, stateUUID, appBaseURL string) (string, error) {
+func (c *Client) StartAuth(ctx context.Context, bankName, bankCountry, psuType, stateUUID, appBaseURL string) (string, error) {
+	tracer := otel.Tracer("bankingsync/enablebanking")
+	ctx, span := tracer.Start(ctx, "enablebanking.start_auth",
+		trace.WithAttributes(
+			attribute.String("bank", bankName),
+			attribute.String("country", bankCountry),
+		),
+	)
+	defer span.End()
+
 	headers, err := c.makeHeaders()
 	if err != nil {
 		return "", fmt.Errorf("makeHeaders: %w", err)
@@ -102,7 +127,7 @@ func (c *Client) StartAuth(bankName, bankCountry, psuType, stateUUID, appBaseURL
 	}
 	body, _ := json.Marshal(payload)
 
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/auth", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/auth", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -111,12 +136,17 @@ func (c *Client) StartAuth(bankName, bankCountry, psuType, stateUUID, appBaseURL
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return "", fmt.Errorf("POST /auth: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("POST /auth HTTP %d: %s", resp.StatusCode, raw)
+		err := fmt.Errorf("POST /auth HTTP %d: %s", resp.StatusCode, raw)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return "", err
 	}
 	var result struct {
 		URL string `json:"url"`
@@ -129,7 +159,11 @@ func (c *Client) StartAuth(bankName, bankCountry, psuType, stateUUID, appBaseURL
 
 // CompleteAuth finalises the OAuth flow using the code and state received from
 // the callback and returns the session with its associated accounts.
-func (c *Client) CompleteAuth(code, state string) (*SessionResponse, error) {
+func (c *Client) CompleteAuth(ctx context.Context, code, state string) (*SessionResponse, error) {
+	tracer := otel.Tracer("bankingsync/enablebanking")
+	ctx, span := tracer.Start(ctx, "enablebanking.complete_auth")
+	defer span.End()
+
 	headers, err := c.makeHeaders()
 	if err != nil {
 		return nil, fmt.Errorf("makeHeaders: %w", err)
@@ -138,7 +172,7 @@ func (c *Client) CompleteAuth(code, state string) (*SessionResponse, error) {
 	payload := map[string]string{"code": code, "state": state}
 	body, _ := json.Marshal(payload)
 
-	req, err := http.NewRequest(http.MethodPost, c.baseURL+"/sessions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/sessions", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -147,16 +181,22 @@ func (c *Client) CompleteAuth(code, state string) (*SessionResponse, error) {
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("POST /sessions: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("POST /sessions HTTP %d: %s", resp.StatusCode, raw)
+		err := fmt.Errorf("POST /sessions HTTP %d: %s", resp.StatusCode, raw)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
 	}
 	var sr SessionResponse
 	if err := json.Unmarshal(raw, &sr); err != nil {
 		return nil, fmt.Errorf("decode /sessions: %w", err)
 	}
+	span.SetAttributes(attribute.Int("account_count", len(sr.Accounts)))
 	return &sr, nil
 }

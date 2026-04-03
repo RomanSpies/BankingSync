@@ -1,6 +1,7 @@
 package enablebanking
 
 import (
+	"context"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
@@ -16,6 +17,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 const apiBase = "https://api.enablebanking.com"
@@ -56,7 +60,7 @@ func NewClient(appID AppIDResolver, pemSrc PEMSource, ownNames map[string]struct
 
 // FetchTransactions retrieves all transactions for accountUID from dateFrom
 // through today, following continuation keys to page through the full result set.
-func (c *Client) FetchTransactions(accountUID string, dateFrom time.Time) ([]Transaction, error) {
+func (c *Client) FetchTransactions(ctx context.Context, accountUID string, dateFrom time.Time) ([]Transaction, error) {
 	headers, err := c.makeHeaders()
 	if err != nil {
 		return nil, fmt.Errorf("makeHeaders: %w", err)
@@ -72,7 +76,7 @@ func (c *Client) FetchTransactions(accountUID string, dateFrom time.Time) ([]Tra
 	reqURL := txnURL + "?" + params
 
 	for reqURL != "" {
-		raw, ck, err := c.fetchPage(reqURL, headers)
+		raw, ck, err := c.fetchPage(ctx, reqURL, headers)
 		if err != nil {
 			return nil, err
 		}
@@ -97,8 +101,12 @@ func (c *Client) FetchTransactions(accountUID string, dateFrom time.Time) ([]Tra
 	return txns, nil
 }
 
-func (c *Client) fetchPage(url string, headers map[string]string) ([]map[string]any, string, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+func (c *Client) fetchPage(ctx context.Context, url string, headers map[string]string) ([]map[string]any, string, error) {
+	tracer := otel.Tracer("bankingsync/enablebanking")
+	_, span := tracer.Start(ctx, "enablebanking.fetch_page")
+	defer span.End()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, "", err
 	}
@@ -108,13 +116,18 @@ func (c *Client) fetchPage(url string, headers map[string]string) ([]map[string]
 
 	resp, err := c.http.Do(req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return nil, "", fmt.Errorf("GET %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("Enable Banking error %d: %s", resp.StatusCode, body)
+		err := fmt.Errorf("Enable Banking error %d: %s", resp.StatusCode, body)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, "", err
 	}
 
 	var data struct {
@@ -124,6 +137,10 @@ func (c *Client) fetchPage(url string, headers map[string]string) ([]map[string]
 	if err := json.Unmarshal(body, &data); err != nil {
 		return nil, "", fmt.Errorf("decode response: %w", err)
 	}
+	span.SetAttributes(
+		attribute.Int("txn_count", len(data.Transactions)),
+		attribute.Bool("has_more", data.ContinuationKey != ""),
+	)
 	return data.Transactions, data.ContinuationKey, nil
 }
 

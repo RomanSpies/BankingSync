@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"time"
 
-	otelpyroscope "github.com/grafana/otel-profiling-go"
 	pyroscope "github.com/grafana/pyroscope-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -77,7 +76,7 @@ func initTelemetry(s *Syncer, mux *http.ServeMux) func() {
 			sdktrace.WithBatcher(traceExp),
 			sdktrace.WithResource(res),
 		)
-		otel.SetTracerProvider(otelpyroscope.NewTracerProvider(tp))
+		otel.SetTracerProvider(newProfileTracerProvider(tp))
 
 		log.Printf("OTLP → %s (metrics + traces)", endpoint)
 	} else {

@@ -198,6 +198,13 @@ docker-build-push:
     - docker logout
     - git tag "$VERSION" "$CI_COMMIT_SHA" 2>/dev/null || true
     - git push "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "$VERSION" 2>/dev/null || true
+    - >-
+      curl -s -X PATCH
+      "https://hub.docker.com/v2/repositories/$DOCKER_HUB_USER/bankingsync/"
+      -H "Authorization: Bearer $DOCKER_HUB_PAT"
+      -H "Content-Type: application/json"
+      --data "$(jq -Rs '{"full_description": .}' < README.md)"
+      || true
   after_script:
     - docker logout || true
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 
 	"bankingsync/store"
 )
@@ -21,12 +26,22 @@ var versionPattern = regexp.MustCompile(`^1\.\d+\.\d+\.\d+$`)
 // checkForUpdate queries Docker Hub for the latest version tag and stores the
 // result in the database. It sends an email notification the first time a new
 // version is detected.
-func checkForUpdate(st *store.Store) {
-	latest, err := fetchLatestVersion()
+func checkForUpdate(ctx context.Context, st *store.Store) {
+	tracer := otel.Tracer("bankingsync")
+	ctx, span := tracer.Start(ctx, "update.check")
+	defer span.End()
+
+	latest, err := fetchLatestVersion(ctx)
 	if err != nil {
 		log.Printf("Update check failed: %v", err)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return
 	}
+	span.SetAttributes(
+		attribute.String("latest_version", latest),
+		attribute.String("current_version", Version),
+	)
 	if latest == "" || latest == Version {
 		return
 	}
@@ -40,7 +55,8 @@ func checkForUpdate(st *store.Store) {
 	if notified != latest {
 		log.Printf("New version available: %s (running %s)", latest, Version)
 		_ = st.SetSetting("update_notified_version", latest)
-		sendEmail(
+		span.SetAttributes(attribute.Bool("notified", true))
+		sendEmail(ctx,
 			"BankingSync: update available",
 			fmt.Sprintf("A new version of BankingSync is available.\n\nRunning: %s\nAvailable: %s\n\nUpdate with: docker compose pull && docker compose up -d\n", Version, latest),
 		)
@@ -48,16 +64,29 @@ func checkForUpdate(st *store.Store) {
 }
 
 // fetchLatestVersion queries Docker Hub and returns the highest version tag.
-func fetchLatestVersion() (string, error) {
+func fetchLatestVersion(ctx context.Context) (string, error) {
+	tracer := otel.Tracer("bankingsync")
+	ctx, span := tracer.Start(ctx, "update.fetch_dockerhub")
+	defer span.End()
+
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(dockerHubTagsURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dockerHubTagsURL, nil)
 	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		return "", fmt.Errorf("GET tags: %w", err)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
+		err := fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return "", err
 	}
 
 	var data struct {
@@ -77,6 +106,7 @@ func fetchLatestVersion() (string, error) {
 			}
 		}
 	}
+	span.SetAttributes(attribute.String("best_tag", best))
 	return best, nil
 }
 
