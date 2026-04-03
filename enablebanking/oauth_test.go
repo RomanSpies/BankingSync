@@ -166,7 +166,7 @@ func TestStartAuth_success(t *testing.T) {
 		})
 	})
 	c := newTestClientWith(t, mux)
-	url, err := c.StartAuth(context.Background(),"TestBank", "DE", "personal", "state-uuid", "http://localhost:8080")
+	url, err := c.StartAuth(context.Background(), "TestBank", "DE", "personal", "state-uuid", "http://localhost:8080")
 	if err != nil {
 		t.Fatalf("StartAuth: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestStartAuth_setsRedirectURLAndState(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"url": "https://bank.example.com"})
 	})
 	c := newTestClientWith(t, mux)
-	_, _ = c.StartAuth(context.Background(),"TestBank", "DE", "personal", "uuid-123", "http://myapp:8080")
+	_, _ = c.StartAuth(context.Background(), "TestBank", "DE", "personal", "uuid-123", "http://myapp:8080")
 
 	if capturedBody["redirect_url"] != "http://myapp:8080/callback" {
 		t.Errorf("redirect_url: got %q, want http://myapp:8080/callback", capturedBody["redirect_url"])
@@ -202,7 +202,7 @@ func TestStartAuth_httpError(t *testing.T) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 	})
 	c := newTestClientWith(t, mux)
-	_, err := c.StartAuth(context.Background(),"Bank", "DE", "personal", "uuid", "http://localhost:8080")
+	_, err := c.StartAuth(context.Background(), "Bank", "DE", "personal", "uuid", "http://localhost:8080")
 	if err == nil {
 		t.Error("expected error on HTTP 400")
 	}
@@ -223,7 +223,7 @@ func TestCompleteAuth_success(t *testing.T) {
 		})
 	})
 	c := newTestClientWith(t, mux)
-	sr, err := c.CompleteAuth(context.Background(),"code-xyz", "state-uuid")
+	sr, err := c.CompleteAuth(context.Background(), "code-xyz", "state-uuid")
 	if err != nil {
 		t.Fatalf("CompleteAuth: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestCompleteAuth_multipleAccounts(t *testing.T) {
 		})
 	})
 	c := newTestClientWith(t, mux)
-	sr, err := c.CompleteAuth(context.Background(),"code", "state")
+	sr, err := c.CompleteAuth(context.Background(), "code", "state")
 	if err != nil {
 		t.Fatalf("CompleteAuth: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestCompleteAuth_httpError(t *testing.T) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
 	c := newTestClientWith(t, mux)
-	_, err := c.CompleteAuth(context.Background(),"bad-code", "state")
+	_, err := c.CompleteAuth(context.Background(), "bad-code", "state")
 	if err == nil {
 		t.Error("expected error on HTTP 401")
 	}
