@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.Version=${VERSION}
 FROM alpine:3 AS runtime
 
 RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S bankingsync && adduser -S bankingsync -G bankingsync \
+    && addgroup -S -g 11011 bankingsync && adduser -S -u 11011 -G bankingsync bankingsync \
     && mkdir -p /data && chown bankingsync:bankingsync /data
 
 WORKDIR /app
