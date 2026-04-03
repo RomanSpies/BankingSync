@@ -49,7 +49,7 @@ body{
   border-bottom:1px solid var(--border);
 }
 .logo{display:flex;align-items:center;text-decoration:none}
-.logo svg{height:32px;width:auto;display:block}
+.logo svg{height:64px;width:auto;display:block}
 
 /* Layout: sidebar + content */
 .layout{display:flex;gap:2.5rem;padding-top:1.5rem}
@@ -87,14 +87,15 @@ body{
   display:flex;align-items:flex-start;justify-content:space-between;
   gap:1rem;margin-bottom:2rem;
 }
-.page-title{font-size:1.25rem;font-weight:700;color:var(--text);letter-spacing:-.02em}
-.page-sub{font-size:.8125rem;color:var(--muted);margin-top:.25rem}
+.page-title{font-size:1.25rem;font-weight:700;color:var(--text);letter-spacing:-.02em;text-shadow:0 0 20px rgba(220,38,38,.3)}
+.page-sub{font-size:.8125rem;color:var(--dim);margin-top:.25rem}
 
 /* Section label */
 .section-label{
   font-size:.875rem;font-weight:600;
   color:var(--text);margin-bottom:.75rem;
   padding-top:.25rem;
+  text-shadow:0 0 16px rgba(220,38,38,.25);
 }
 
 /* Buttons */
@@ -144,13 +145,14 @@ body{
 /* Table */
 .tbl-wrap{border:1px solid var(--border);border-radius:var(--r);overflow:hidden;margin-top:.25rem}
 table{width:100%;border-collapse:collapse;font-size:.8125rem}
-thead{background:var(--surface)}
+thead{background:rgba(220,38,38,.06)}
 th{
   text-align:left;padding:.6rem 1rem;
   font-size:.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
-  color:var(--muted);border-bottom:1px solid var(--border);
+  color:#d4d4d4;border-bottom:1px solid rgba(220,38,38,.15);
+  text-shadow:0 0 12px rgba(220,38,38,.3);
 }
-td{padding:.65rem 1rem;border-bottom:1px solid var(--border);color:var(--dim);vertical-align:middle}
+td{padding:.65rem 1rem;border-bottom:1px solid var(--border);color:#d4d4d4;vertical-align:middle}
 tbody tr:last-child td{border-bottom:none}
 tbody tr{transition:background .1s}
 tbody tr:hover{background:var(--surface)}
@@ -158,7 +160,7 @@ tbody tr:hover{background:var(--surface)}
 
 /* Forms */
 .field{margin-bottom:1.25rem}
-label{display:block;font-size:.8125rem;font-weight:500;color:var(--dim);margin-bottom:.35rem}
+label{display:block;font-size:.8125rem;font-weight:500;color:#d4d4d4;margin-bottom:.35rem}
 input[type=text],input[type=file],input[type=date],select{
   width:100%;padding:.55rem .85rem;
   background:var(--surface);border:1px solid var(--border-hi);
@@ -169,7 +171,7 @@ input[type=text]:focus,input[type=date]:focus,select:focus{
   outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--glow);
 }
 input:disabled,select:disabled{opacity:.4;cursor:not-allowed}
-.field-hint{font-size:.75rem;color:var(--muted);margin-top:.3rem}
+.field-hint{font-size:.75rem;color:#737373;margin-top:.3rem}
 
 /* Code */
 .code-block{
@@ -183,7 +185,7 @@ input:disabled,select:disabled{opacity:.4;cursor:not-allowed}
 .empty{text-align:center;padding:3rem 1rem}
 .empty-icon{font-size:2rem;margin-bottom:.75rem}
 .empty-title{font-size:1rem;font-weight:600;color:var(--text);margin-bottom:.35rem}
-.empty-desc{font-size:.8125rem;color:var(--muted);margin-bottom:1.5rem}
+.empty-desc{font-size:.8125rem;color:var(--dim);margin-bottom:1.5rem}
 
 /* Account cards (pick-account) */
 .acct-card{
@@ -256,7 +258,7 @@ input:disabled,select:disabled{opacity:.4;cursor:not-allowed}
           <tspan font-weight="300" fill="url(#coralOrange)">sync</tspan>
           <tspan font-weight="800" fill="#dc2626">.</tspan>
         </text>
-        <text x="4" y="24" font-family="system-ui,sans-serif" font-size="10" font-weight="600" fill="#525252" letter-spacing="4">INTELLIGENT FINANCE</text>
+        <text x="4" y="24" font-family="system-ui,sans-serif" font-size="10" font-weight="600" fill="#a3a3a3" letter-spacing="4">INTELLIGENT FINANCE</text>
       </g>
     </svg>
   </a>
@@ -285,7 +287,7 @@ input:disabled,select:disabled{opacity:.4;cursor:not-allowed}
     </main>
   </div>
 </div>
-<footer style="text-align:center;padding:1rem 0;font-size:.6875rem;color:var(--muted);border-top:1px solid var(--border)">bankingsync v{{version}}</footer>
+<footer style="text-align:center;padding:2rem 0;margin-top:3rem;font-size:.6875rem;color:var(--muted);border-top:1px solid var(--border)">bankingsync v{{version}}</footer>
 </div>
 <script>
 document.querySelectorAll('.sidebar-item').forEach(function(a){
