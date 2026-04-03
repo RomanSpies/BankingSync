@@ -197,7 +197,7 @@ docker-build-push:
     - docker push "$DOCKER_HUB_USER/bankingsync:latest"
     - docker logout
     - git tag "$VERSION" "$CI_COMMIT_SHA" 2>/dev/null || true
-    - git push "https://gitlab-ci-token:${CI_GIT_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "$VERSION" 2>/dev/null || true
+    - git push "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "$VERSION" 2>/dev/null || true
   after_script:
     - docker logout || true
 
