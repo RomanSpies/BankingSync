@@ -23,7 +23,7 @@ COPY --from=builder /bankingsync /app/bankingsync
 FROM runtime AS sbom
 
 COPY --from=anchore/syft:latest /syft /usr/local/bin/syft
-RUN syft dir:/ --exclude './usr/local/bin/**' -o cyclonedx-json=/app/sbom.cdx.json
+RUN syft dir:/ --select-catalogers "apk,go" -o cyclonedx-json=/app/sbom.cdx.json
 
 FROM runtime
 

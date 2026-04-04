@@ -217,15 +217,15 @@ func TestProfile_separateRootSpansGetDifferentLabels(t *testing.T) {
 
 // --- default constructor ---------------------------------------------------
 
-func TestNewProfileTracerProvider_defaultsToAllSpans(t *testing.T) {
+func TestNewProfileTracerProvider_defaultScopes(t *testing.T) {
 	sdkTP := sdktrace.NewTracerProvider()
 	wrapped := newProfileTracerProvider(sdkTP).(*profileTracerProvider)
 
 	if wrapped.config.spanNameScope != profileScopeAllSpans {
 		t.Errorf("spanNameScope: got %d, want %d (allSpans)", wrapped.config.spanNameScope, profileScopeAllSpans)
 	}
-	if wrapped.config.spanIDScope != profileScopeAllSpans {
-		t.Errorf("spanIDScope: got %d, want %d (allSpans)", wrapped.config.spanIDScope, profileScopeAllSpans)
+	if wrapped.config.spanIDScope != profileScopeRootSpan {
+		t.Errorf("spanIDScope: got %d, want %d (rootSpan)", wrapped.config.spanIDScope, profileScopeRootSpan)
 	}
 }
 

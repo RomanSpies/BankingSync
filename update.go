@@ -42,10 +42,8 @@ func checkForUpdate(ctx context.Context, st *store.Store) {
 		attribute.String("latest_version", latest),
 		attribute.String("current_version", Version),
 	)
-	if latest == "" || latest == Version {
-		return
-	}
-	if !isNewer(latest, Version) {
+	if latest == "" || latest == Version || !isNewer(latest, Version) {
+		_ = st.SetSetting("update_available", "")
 		return
 	}
 
