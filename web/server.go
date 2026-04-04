@@ -718,7 +718,6 @@ func (s *Server) handleSBOM(w http.ResponseWriter, r *http.Request) {
 		Format     string
 		GoModules  []sbomRow
 		OSPackages []sbomRow
-		Other      []sbomRow
 		Total      int
 	}
 
@@ -740,7 +739,7 @@ func (s *Server) handleSBOM(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var goMods, osPkgs, other []sbomRow
+	var goMods, osPkgs []sbomRow
 	for _, c := range bom.Components {
 		row := sbomRow{
 			Name:    c.Name,
@@ -752,22 +751,18 @@ func (s *Server) handleSBOM(w http.ResponseWriter, r *http.Request) {
 			goMods = append(goMods, row)
 		case strings.HasPrefix(c.PURL, "pkg:apk/"):
 			osPkgs = append(osPkgs, row)
-		default:
-			other = append(other, row)
 		}
 	}
 
 	sort.Slice(goMods, func(i, j int) bool { return goMods[i].Name < goMods[j].Name })
 	sort.Slice(osPkgs, func(i, j int) bool { return osPkgs[i].Name < osPkgs[j].Name })
-	sort.Slice(other, func(i, j int) bool { return other[i].Name < other[j].Name })
 
 	s.render(w, "sbom.html", sbomData{
 		Title:      "SBOM",
 		Format:     bom.BOMFormat + " " + bom.SpecVersion,
 		GoModules:  goMods,
 		OSPackages: osPkgs,
-		Other:      other,
-		Total:      len(bom.Components),
+		Total:      len(goMods) + len(osPkgs),
 	})
 }
 

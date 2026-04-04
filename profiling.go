@@ -3,9 +3,10 @@ package main
 // Inlined and fixed version of github.com/grafana/otel-profiling-go v0.5.1.
 //
 // Changes from upstream:
-//   - Default scope changed from scopeRootSpan to scopeAllSpans so that every
-//     span gets its own pprof labels and pyroscope.profile.id attribute,
-//     enabling per-span Pyroscope flame graph correlation.
+//   - spanNameScope set to allSpans (upstream default: rootSpan) so every span
+//     gets its own span_name pprof label, giving per-operation breakdown in
+//     Pyroscope flame graphs. spanIDScope stays at the upstream default
+//     (rootSpan) so all CPU samples aggregate under the root span's profile.
 //   - Bug fix: the upstream withSpanIDScope option incorrectly sets
 //     spanNameScope instead of spanIDScope (line 160 in v0.5.1).
 
@@ -47,7 +48,7 @@ func newProfileTracerProvider(tp trace.TracerProvider) trace.TracerProvider {
 		tp: tp,
 		config: profileConfig{
 			spanNameScope: profileScopeAllSpans,
-			spanIDScope:   profileScopeAllSpans,
+			spanIDScope:   profileScopeRootSpan,
 		},
 	}
 }

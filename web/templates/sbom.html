@@ -30,12 +30,6 @@
     <div style="font-size:1.5rem;font-weight:700;color:#34d399">{{len .OSPackages}}</div>
     <div style="font-size:.75rem;color:var(--dim);margin-top:.25rem">OS Packages</div>
   </div>
-  {{if .Other}}
-  <div style="flex:1;min-width:120px;padding:1rem;border:1px solid var(--border);border-radius:var(--r);text-align:center">
-    <div style="font-size:1.5rem;font-weight:700;color:var(--dim)">{{len .Other}}</div>
-    <div style="font-size:.75rem;color:var(--dim);margin-top:.25rem">Other</div>
-  </div>
-  {{end}}
 </div>
 
 {{if .GoModules}}
@@ -63,24 +57,6 @@
     <thead><tr><th>Name</th><th>Version</th><th>License</th></tr></thead>
     <tbody>
     {{range .OSPackages}}
-    <tr>
-      <td class="td-main">{{.Name}}</td>
-      <td><span class="mono">{{.Version}}</span></td>
-      <td>{{if .License}}{{.License}}{{else}}<span style="color:var(--muted)">&mdash;</span>{{end}}</td>
-    </tr>
-    {{end}}
-    </tbody>
-  </table>
-</div>
-{{end}}
-
-{{if .Other}}
-<p class="section-label">Other Components</p>
-<div class="tbl-wrap">
-  <table>
-    <thead><tr><th>Name</th><th>Version</th><th>License</th></tr></thead>
-    <tbody>
-    {{range .Other}}
     <tr>
       <td class="td-main">{{.Name}}</td>
       <td><span class="mono">{{.Version}}</span></td>
