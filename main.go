@@ -127,7 +127,7 @@ func (s *Syncer) connect(ctx context.Context) error {
 		mustEnv("ACTUAL_PASSWORD"),
 		mustEnv("ACTUAL_SYNC_ID"),
 		"/data/actual-cache",
-		insecureTLS
+		insecureTLS,
 	)
 	if err != nil {
 		return err
