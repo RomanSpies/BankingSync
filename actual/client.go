@@ -1,5 +1,5 @@
 package actual
- 
+
 import (
 	"archive/zip"
 	"bytes"
@@ -14,7 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
- 
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"

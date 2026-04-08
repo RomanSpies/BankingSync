@@ -79,24 +79,40 @@ In Actual Budget, go to **Settings > Sync > Show file ID**. Copy the value.
 
 ### 3. Start bankingsync
 
-Create a `docker-compose.yml` with the three required variables:
+Create a `docker-compose.yml`. bankingsync waits for Actual Budget to be healthy before starting its first sync:
 
 ```yaml
 services:
+  actual:
+    image: actualbudget/actual-server:latest
+    restart: unless-stopped
+    expose:
+      - "5006"
+    volumes:
+      - actual_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "node src/scripts/health-check.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   bankingsync:
     image: romanspies/bankingsync:latest
-    container_name: bankingsync
     restart: unless-stopped
-    ports:
-      - "8443:8443"
+    depends_on:
+      actual:
+        condition: service_healthy
+    expose:
+      - "8443"
     volumes:
       - bankingsync_data:/data
     environment:
-      ACTUAL_URL: "http://your-actual-instance:5006"
+      ACTUAL_URL: "http://actual:5006"
       ACTUAL_PASSWORD: "your-password"
       ACTUAL_SYNC_ID: "your-sync-id"
 
 volumes:
+  actual_data:
   bankingsync_data:
 ```
 

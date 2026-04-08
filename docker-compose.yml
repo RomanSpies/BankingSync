@@ -1,8 +1,28 @@
 services:
+  actual:
+    image: actualbudget/actual-server:latest
+    container_name: actual
+    restart: always
+    expose:
+      - "5006"
+    volumes:
+      - actual_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "node src/scripts/health-check.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      actual_net:
+        ipv4_address: 172.30.5.10
+
   bridge-bank:
     image: romanspies/bankingsync:latest
     container_name: bridge-bank
     restart: always
+    depends_on:
+      actual:
+        condition: service_healthy
 
     expose:
       - "8443"
@@ -11,7 +31,7 @@ services:
       - bridge_bank_data:/data
 
     environment:
-      ACTUAL_URL: "http://URL"
+      ACTUAL_URL: "http://actual:5006"
       ACTUAL_PASSWORD: "redacted"
       ACTUAL_SYNC_ID: "redacted"
       ACTUAL_ACCOUNT: "redacted"
@@ -40,6 +60,7 @@ services:
 
 
 volumes:
+  actual_data:
   bridge_bank_data:
 
 networks:
