@@ -56,7 +56,7 @@ services:
       ACTUAL_URL: "http://your-actual-instance:5006"
       ACTUAL_PASSWORD: "your-actual-password"
       ACTUAL_SYNC_ID: "your-sync-id"
-
+      # ACTUAL_INSECURE_TLS: "true"     # Skip TLS cert verification (for self-signed certs)
       # Optional — defaults shown
       ACTUAL_ACCOUNT: "Revolut"         # Default Actual Budget account (each bank can override via UI)
       SYNC_INTERVAL_HOURS: "6"          # Sync frequency

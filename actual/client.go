@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"crypto/tls"
 	"log"
 	"net/http"
 	"os"
@@ -38,13 +39,20 @@ type Client struct {
 
 // NewClient authenticates against the Actual Budget server, resolves the file
 // identified by syncID, downloads the budget, and performs an initial sync.
-func NewClient(ctx context.Context, baseURL, password, syncID, dataDir string) (*Client, error) {
+func NewClient(ctx context.Context, baseURL, password, syncID, dataDir string, insecureTLS ...bool) (*Client, error) {
 	tracer := otel.Tracer("bankingsync/actual")
 	ctx, span := tracer.Start(ctx, "actual.init")
 	defer span.End()
 
+	httpClient := &http.Client{Timeout: 60 * time.Second}
+	if len(insecureTLS) > 0 && insecureTLS[0] {
+		httpClient.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+
 	c := &Client{
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		httpClient: httpClient,
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		dataDir:    dataDir,
 	}

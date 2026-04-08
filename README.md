@@ -137,6 +137,7 @@ All configuration is via environment variables. Only three are required.
 | `ACTUAL_ACCOUNT` | No | `Revolut` | Default Actual Budget account name (used as the pre-filled value when connecting a new bank; each bank can be mapped to a different account via the web UI) |
 | `EB_APPLICATION_ID` | No | — | Enable Banking application ID (locks the field in the UI if set) |
 | `SYNC_INTERVAL_HOURS` | No | `6` | How often to sync |
+| `ACTUAL_INSECURE_TLS` | No | `false` | Skip TLS certificate verification when connecting to Actual Budget (useful for self-signed certs) |
 | `ACCOUNT_HOLDER_NAME` | No | — | Your name(s) as they appear on transactions, comma-separated. Suppresses self-transfers from appearing as payees. |
 | `WEB_ADDR` | No | `:8443` | Web UI listen address |
 | `NOTIFY_EMAIL` | No | — | Email for sync failure alerts and session expiry warnings |

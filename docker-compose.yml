@@ -21,7 +21,7 @@ services:
       SYNC_INTERVAL_HOURS: "4"
 
       ACCOUNT_HOLDER_NAME: "YourName YourSurname, YourSurname YourName"
-
+      ACTUAL_INSECURE_TLS: "false"
       NOTIFY_EMAIL: ""
       SMTP_HOST: ""
       SMTP_PORT: "587"

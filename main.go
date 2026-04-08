@@ -121,11 +121,13 @@ func (s *Syncer) ensureActual(ctx context.Context) error {
 }
 
 func (s *Syncer) connect(ctx context.Context) error {
+	insecureTLS := strings.EqualFold(os.Getenv("ACTUAL_INSECURE_TLS"), "true")
 	ac, err := actual.NewClient(ctx,
 		mustEnv("ACTUAL_URL"),
 		mustEnv("ACTUAL_PASSWORD"),
 		mustEnv("ACTUAL_SYNC_ID"),
 		"/data/actual-cache",
+		insecureTLS
 	)
 	if err != nil {
 		return err
