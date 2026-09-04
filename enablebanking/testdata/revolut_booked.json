@@ -1,0 +1,14 @@
+{
+  "transactions": [
+    {
+      "transaction_id": "ref-0000d4e5f6a7",
+      "booking_date": "2026-07-05",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "amount": "-15.40", "currency": "EUR" },
+      "creditor_name": "Muster Handel",
+      "remittance_information_unstructured": "Abonnement"
+    }
+  ],
+  "continuation_key": ""
+}

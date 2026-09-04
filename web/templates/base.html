@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BankingSync{{if .Title}} · {{.Title}}{{end}}</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg:       #0a0a0a;
+  --surface:  #111111;
+  --raised:   #1a1a1a;
+  --border:   #262626;
+  --border-hi:#333333;
+  --text:     #f5f5f5;
+  --dim:      #a3a3a3;
+  --muted:    #525252;
+  --primary:  #dc2626;
+  --primary-h:#b91c1c;
+  --glow:     rgba(220,38,38,.12);
+  --green:    #22c55e;
+  --green-dim:rgba(34,197,94,.08);
+  --amber:    #eab308;
+  --amber-dim:rgba(234,179,8,.08);
+  --red:      #ef4444;
+  --red-dim:  rgba(239,68,68,.08);
+  --r:        8px;
+  --mono:     'SF Mono','Fira Code','Cascadia Code','Consolas',monospace;
+  --sidebar-w:180px;
+}
+
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',system-ui,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  min-height:100vh;
+  line-height:1.6;
+  font-size:14px;
+}
+
+/* Shell */
+.shell{max-width:1060px;margin:0 auto;padding:0 1.5rem 4rem}
+
+/* Topbar — logo only, full width */
+.topbar{
+  display:flex;align-items:center;
+  padding:1rem 0;margin-bottom:.5rem;
+  border-bottom:1px solid var(--border);
+}
+.logo{display:flex;align-items:center;text-decoration:none}
+.logo svg{height:64px;width:auto;display:block}
+
+/* Layout: sidebar + content */
+.layout{display:flex;gap:2.5rem;padding-top:1.5rem}
+
+/* Sidebar */
+.sidebar{
+  width:var(--sidebar-w);flex-shrink:0;
+  position:sticky;top:1.5rem;align-self:flex-start;
+}
+.sidebar-nav{display:flex;flex-direction:column;gap:.15rem}
+.sidebar-label{
+  font-size:.6875rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:.08em;color:var(--muted);padding:.5rem .75rem .35rem;
+}
+.sidebar-item{
+  display:flex;align-items:center;gap:.5rem;
+  padding:.45rem .75rem;border-radius:6px;
+  font-size:.8125rem;font-weight:500;color:var(--dim);
+  text-decoration:none;transition:background .15s,color .15s;
+  border-left:2px solid transparent;
+}
+.sidebar-item:hover{background:var(--raised);color:var(--text)}
+.sidebar-item.active{color:var(--primary);border-left-color:var(--primary);background:var(--glow)}
+.sidebar-item svg{width:15px;height:15px;flex-shrink:0;opacity:.7}
+.sidebar-item.active svg{opacity:1}
+
+/* Main content */
+.content{flex:1;min-width:0}
+
+/* Card — flat, no background */
+.card{padding:0}
+
+/* Page header */
+.page-head{
+  display:flex;align-items:flex-start;justify-content:space-between;
+  gap:1rem;margin-bottom:2rem;
+}
+.page-title{font-size:1.25rem;font-weight:700;color:var(--text);letter-spacing:-.02em;text-shadow:0 0 20px rgba(220,38,38,.3)}
+.page-sub{font-size:.8125rem;color:var(--dim);margin-top:.25rem}
+
+/* Section label */
+.section-label{
+  font-size:.875rem;font-weight:600;
+  color:var(--text);margin-bottom:.75rem;
+  padding-top:.25rem;
+  text-shadow:0 0 16px rgba(220,38,38,.25);
+}
+
+/* Buttons */
+.btn{
+  display:inline-flex;align-items:center;gap:.4rem;
+  padding:.5rem 1rem;border-radius:6px;
+  font-size:.8125rem;font-weight:500;cursor:pointer;
+  text-decoration:none;border:none;
+  transition:background .15s,box-shadow .15s;
+  white-space:nowrap;line-height:1;
+}
+.btn:active{transform:scale(.98)}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-primary:hover{background:var(--primary-h)}
+.btn-ghost{background:transparent;color:var(--dim);border:1px solid var(--border-hi)}
+.btn-ghost:hover{color:var(--text);background:var(--raised);border-color:var(--muted)}
+.btn-danger{background:var(--red);color:#fff}
+.btn-danger:hover{background:#dc2626}
+.btn-sm{padding:.25rem .6rem;font-size:.75rem}
+
+/* Alerts */
+.alert{
+  display:flex;gap:.65rem;padding:.75rem 1rem;
+  border-radius:var(--r);margin-bottom:1.25rem;
+  font-size:.8125rem;line-height:1.5;align-items:flex-start;
+}
+.alert-icon{flex-shrink:0;margin-top:.1rem;opacity:.8}
+.alert-error {background:var(--red-dim);  border:1px solid rgba(239,68,68,.2); color:#fca5a5}
+.alert-success{background:var(--green-dim);border:1px solid rgba(34,197,94,.2);color:#86efac}
+.alert-info  {background:rgba(220,38,38,.06);border:1px solid rgba(220,38,38,.15);color:#fca5a5}
+.alert-warn  {background:var(--amber-dim);border:1px solid rgba(234,179,8,.2);color:#fde047}
+
+/* Badges */
+.badge{
+  display:inline-flex;align-items:center;gap:.3rem;
+  padding:.15rem .5rem;border-radius:99px;
+  font-size:.6875rem;font-weight:600;letter-spacing:.01em;
+}
+.dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
+.badge-green{background:var(--green-dim);border:1px solid rgba(34,197,94,.2);color:#86efac}
+.badge-green .dot{background:var(--green);box-shadow:0 0 4px var(--green)}
+.badge-yellow{background:var(--amber-dim);border:1px solid rgba(234,179,8,.2);color:#fde047}
+.badge-yellow .dot{background:var(--amber);box-shadow:0 0 4px var(--amber)}
+.badge-red{background:var(--red-dim);border:1px solid rgba(239,68,68,.2);color:#fca5a5}
+.badge-red .dot{background:var(--red);box-shadow:0 0 4px var(--red)}
+
+/* Table */
+/* overflow-x must be auto, not hidden: a wide table would otherwise be clipped
+   at the right edge, taking the row actions with it and leaving no way to reach
+   them. overflow-y stays hidden so the rounded corners still clip. */
+.tbl-wrap{border:1px solid var(--border);border-radius:var(--r);overflow-x:auto;overflow-y:hidden;margin-top:.25rem}
+table{width:100%;border-collapse:collapse;font-size:.8125rem}
+thead{background:rgba(220,38,38,.06)}
+th{
+  text-align:left;padding:.6rem 1rem;
+  font-size:.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;
+  color:#d4d4d4;border-bottom:1px solid rgba(220,38,38,.15);
+  text-shadow:0 0 12px rgba(220,38,38,.3);
+}
+td{padding:.65rem 1rem;border-bottom:1px solid var(--border);color:#d4d4d4;vertical-align:middle}
+tbody tr:last-child td{border-bottom:none}
+tbody tr{transition:background .1s}
+tbody tr:hover{background:var(--surface)}
+.td-main{color:var(--text);font-weight:500}
+
+/* Forms */
+.field{margin-bottom:1.25rem}
+label{display:block;font-size:.8125rem;font-weight:500;color:#d4d4d4;margin-bottom:.35rem}
+input[type=text],input[type=file],input[type=date],select{
+  width:100%;padding:.55rem .85rem;
+  background:var(--surface);border:1px solid var(--border-hi);
+  border-radius:6px;color:var(--text);font-size:.875rem;
+  transition:border-color .15s,box-shadow .15s;
+}
+input[type=text]:focus,input[type=date]:focus,select:focus{
+  outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--glow);
+}
+input:disabled,select:disabled{opacity:.4;cursor:not-allowed}
+.field-hint{font-size:.75rem;color:#737373;margin-top:.3rem}
+
+/* Code */
+.code-block{
+  font-family:var(--mono);background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r);
+  padding:.75rem 1rem;font-size:.75rem;color:var(--dim);
+  word-break:break-all;line-height:1.7;
+}
+
+/* Empty state */
+.empty{text-align:center;padding:3rem 1rem}
+.empty-icon{font-size:2rem;margin-bottom:.75rem}
+.empty-title{font-size:1rem;font-weight:600;color:var(--text);margin-bottom:.35rem}
+.empty-desc{font-size:.8125rem;color:var(--dim);margin-bottom:1.5rem}
+
+/* Account cards (pick-account) */
+.acct-card{
+  display:flex;align-items:center;gap:.85rem;padding:.75rem 1rem;
+  border:1px solid var(--border);border-radius:var(--r);cursor:pointer;
+  margin-bottom:.4rem;transition:border-color .15s,background .15s;
+}
+.acct-card:hover{border-color:var(--border-hi);background:var(--surface)}
+.acct-card:has(input:checked){border-color:var(--primary);background:var(--glow)}
+.acct-card input[type=radio]{accent-color:var(--primary);width:16px;height:16px;flex-shrink:0}
+.acct-uid{font-family:var(--mono);font-size:.75rem;color:var(--muted)}
+
+/* Spinner */
+@keyframes spin{to{transform:rotate(360deg)}}
+.spin{animation:spin .7s linear infinite}
+
+/* Divider */
+.divider{border:none;border-top:1px solid var(--border);margin:1.75rem 0}
+
+/* Utils */
+.mt{margin-top:.75rem}
+.mt-lg{margin-top:1.5rem}
+.actions{display:flex;gap:.35rem;align-items:center;flex-wrap:wrap}
+.actions form{display:contents}
+/* The action column takes exactly the width its buttons need; width:1% makes the
+   table give the remainder to the text columns instead of squeezing the buttons
+   until they wrap or disappear. */
+td.actions-cell,th.actions-cell{width:1%;white-space:nowrap}
+td.actions-cell .actions{flex-wrap:nowrap}
+.mono{font-family:var(--mono);font-size:.8125rem}
+/* Visually hidden but read out: an empty <th> leaves the action column without
+   a name for anyone using a screen reader. */
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* Responsive: collapse sidebar on small screens */
+@media(max-width:700px){
+  .layout{flex-direction:column;gap:0}
+  th,td{padding-left:.55rem;padding-right:.55rem}
+  .sidebar{width:100%;position:static;border-bottom:1px solid var(--border);padding-bottom:1rem;margin-bottom:1.5rem}
+  .sidebar-nav{flex-direction:row;gap:.25rem;flex-wrap:wrap}
+  .sidebar-item{border-left:none;border-bottom:2px solid transparent}
+  .sidebar-item.active{border-left:none;border-bottom-color:var(--primary)}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+<header class="topbar">
+  <a class="logo" href="/status">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="10 15 480 110">
+      <defs>
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;800&amp;display=swap');
+          .logo-text{font-family:'Outfit',system-ui,-apple-system,sans-serif}
+        </style>
+        <linearGradient id="coralOrange" x1="100%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#f97316"/>
+          <stop offset="100%" stop-color="#f43f5e"/>
+        </linearGradient>
+        <linearGradient id="violetIndigo" x1="0%" y1="100%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#4c1d95"/>
+          <stop offset="100%" stop-color="#8b5cf6"/>
+        </linearGradient>
+        <filter id="ribbonShadow" x="-10%" y="-10%" width="120%" height="120%">
+          <feDropShadow dx="2" dy="4" stdDeviation="3" flood-color="#000000" flood-opacity="0.1"/>
+        </filter>
+      </defs>
+      <g transform="translate(10, 5) skewX(-8)" filter="url(#ribbonShadow)">
+        <path d="M 40 35 L 80 35 A 20 20 0 0 1 100 55 A 20 20 0 0 1 80 75 L 60 75" fill="none" stroke="url(#coralOrange)" stroke-width="12" stroke-linecap="round"/>
+        <polygon points="61,63 41,75 61,87" fill="#f43f5e"/>
+        <path d="M 90 95 L 50 95 A 20 20 0 0 1 30 75 A 20 20 0 0 1 50 55 L 70 55" fill="none" stroke="url(#violetIndigo)" stroke-width="12" stroke-linecap="round"/>
+        <polygon points="69,43 89,55 69,67" fill="#8b5cf6"/>
+        <circle cx="20" cy="25" r="4" fill="#f97316" opacity="0.8"/>
+        <circle cx="115" cy="100" r="5" fill="#4c1d95" opacity="0.6"/>
+      </g>
+      <g transform="translate(135, 84)" class="logo-text">
+        <text x="0" y="0" font-size="52" letter-spacing="-1.5">
+          <tspan font-weight="800" fill="#f5f5f5">banking</tspan>
+          <tspan font-weight="300" fill="url(#coralOrange)">sync</tspan>
+          <tspan font-weight="800" fill="#dc2626">.</tspan>
+        </text>
+        <text x="4" y="24" font-family="system-ui,sans-serif" font-size="10" font-weight="600" fill="#a3a3a3" letter-spacing="4">INTELLIGENT FINANCE</text>
+      </g>
+    </svg>
+  </a>
+</header>
+<div class="layout">
+  <aside class="sidebar">
+    <nav class="sidebar-nav">
+      <span class="sidebar-label">Navigation</span>
+      <a class="sidebar-item" href="/status">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        Dashboard
+      </a>
+      <a class="sidebar-item" href="/connect">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+        Connect Bank
+      </a>
+      <a class="sidebar-item" href="/setup">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        Setup
+      </a>
+      <a class="sidebar-item" href="/review">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+        Review
+      </a>
+      <a class="sidebar-item" href="/matching">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+        Matching
+      </a>
+      <a class="sidebar-item" href="/sbom">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        SBOM
+      </a>
+    </nav>
+  </aside>
+  <div class="content">
+    <main class="card">
+    {{template "content" .}}
+    </main>
+  </div>
+</div>
+<footer style="text-align:center;padding:2rem 0;margin-top:3rem;font-size:.6875rem;color:var(--muted);border-top:1px solid var(--border)">bankingsync v{{version}}</footer>
+</div>
+<script>
+document.querySelectorAll('.sidebar-item').forEach(function(a){
+  if(window.location.pathname===a.getAttribute('href'))a.classList.add('active');
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,324 @@
+---
+default:
+  tags:
+    - go
+  before_script:
+    - export PATH="$GOPATH/bin:$PATH"
+  after_script:
+    - chmod -R u+w "$GOMODCACHE" || true
+
+variables:
+  GOPATH: "$CI_PROJECT_DIR/.cache/go"
+  GOMODCACHE: "$CI_PROJECT_DIR/.cache/go/pkg/mod"
+  GOCACHE: "$CI_PROJECT_DIR/.cache/go/build"
+  GOFLAGS: "-mod=readonly"
+  GOTOOLCHAIN: "local"
+  SONARQUBE: "$CI_PROJECT_DIR/sonarqube"
+  # Major version. Bumping it also requires no change in update.go: the tag
+  # pattern there accepts any major on purpose, so a bump does not silently
+  # switch the update check off.
+  MAJOR: "4"
+
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+stages:
+  - build
+  - test
+  - sast
+  - deps
+  - sonar
+  - docker
+
+.go-cache: &go-cache
+  cache:
+    key:
+      files:
+        - go.sum
+    paths:
+      - .cache/go/pkg/mod
+      - .cache/go/build
+
+build:
+  stage: build
+  <<: *go-cache
+  script:
+    - go build ./...
+
+unit-tests:
+  stage: test
+  <<: *go-cache
+  needs: [build]
+  script:
+    - mkdir -p "$SONARQUBE"
+    - which gotestsum || go install gotest.tools/gotestsum@latest
+    - gotestsum --format standard-verbose --jsonfile "$SONARQUBE/test-report.json" --junitfile "$SONARQUBE/junit-report.xml" -- -count=1 -race -coverprofile=coverage.out -covermode=atomic ./...
+    - go tool cover -func=coverage.out | tail -1
+  coverage: '/^total:\s+\(statements\)\s+(\d+\.\d+)%/'
+  artifacts:
+    when: always
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+      junit: sonarqube/junit-report.xml
+    paths:
+      - coverage.out
+      - sonarqube/test-report.json
+      - sonarqube/junit-report.xml
+    expire_in: 7 days
+
+coverage-xml:
+  stage: test
+  <<: *go-cache
+  needs: [unit-tests]
+  script:
+    - which gocover-cobertura || go install github.com/boumenot/gocover-cobertura@latest
+    - gocover-cobertura < coverage.out > coverage.xml
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    expire_in: 7 days
+
+go-vet:
+  stage: sast
+  <<: *go-cache
+  needs: [build]
+  script:
+    - go vet ./...
+    # Tagged files are invisible to a plain vet. Without this line the live
+    # harness could stop compiling and nothing would notice until the expensive
+    # integration job ran.
+    - go vet -tags fireflylive ./...
+
+staticcheck:
+  stage: sast
+  <<: *go-cache
+  needs: [build]
+  allow_failure: true
+  script:
+    - which staticcheck || go install honnef.co/go/tools/cmd/staticcheck@latest
+    - staticcheck ./...
+
+gosec:
+  stage: sast
+  <<: *go-cache
+  needs: [build]
+  allow_failure: true
+  script:
+    - mkdir -p "$SONARQUBE"
+    - which gosec || go install github.com/securego/gosec/v2/cmd/gosec@latest
+    - gosec -exclude-dir .cache -fmt sarif -out "$SONARQUBE/gosec.sarif" -severity medium ./... || true
+  artifacts:
+    when: always
+    paths:
+      - sonarqube/gosec.sarif
+    expire_in: 7 days
+
+golangci-lint:
+  stage: sast
+  <<: *go-cache
+  needs: [build]
+  allow_failure: true
+  script:
+    - mkdir -p "$SONARQUBE"
+    - which golangci-lint || go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+    - golangci-lint run --out-format checkstyle ./... > "$SONARQUBE/golangci-checkstyle.xml" 2>&1 || true
+  artifacts:
+    when: always
+    paths:
+      - sonarqube/golangci-checkstyle.xml
+    expire_in: 7 days
+
+dependency-scan:
+  stage: deps
+  needs: [build]
+  allow_failure: true
+  script:
+    - mkdir -p "$SONARQUBE"
+    - trivy fs --scanners vuln --format template
+        --template "@/usr/local/share/trivy/templates/gitlab.tpl"
+        -o gl-dependency-scanning-report.json .
+    # Second pass for Sonar. Trivy takes a single --format, and the cached
+    # vulnerability DB from the run above makes this one cheap.
+    - trivy fs --scanners vuln --format sarif
+        --severity MEDIUM,HIGH,CRITICAL
+        -o "$SONARQUBE/trivy.sarif" .
+  artifacts:
+    when: always
+    reports:
+      dependency_scanning: gl-dependency-scanning-report.json
+    paths:
+      - sonarqube/trivy.sarif
+    expire_in: 7 days
+
+sonar-job:
+  stage: sonar
+  needs:
+    - unit-tests
+    - coverage-xml
+    - golangci-lint
+    - gosec
+    - dependency-scan
+  allow_failure: false
+  script:
+    - sonar-scanner
+        -Dsonar.token=$SONAR_TOKEN
+        -Dsonar.projectKey=$SONAR_PROJECT_KEY
+        -Dsonar.sources=.
+        -Dsonar.exclusions=**/*_test.go,**/.cache/**
+        -Dsonar.tests=.
+        -Dsonar.test.inclusions=**/*_test.go
+        -Dsonar.coverage.exclusions=main.go,telemetry.go,email.go
+        -Dsonar.go.coverage.reportPaths=coverage.out
+        -Dsonar.go.tests.reportPaths=$SONARQUBE/test-report.json
+        -Dsonar.go.golangci-lint.reportPaths=$SONARQUBE/golangci-checkstyle.xml
+        -Dsonar.sarifReportPaths=$SONARQUBE/gosec.sarif,$SONARQUBE/trivy.sarif
+        -Dsonar.qualitygate.wait=true
+
+firefly-integration:
+  stage: test
+  <<: *go-cache
+  needs: [build]
+  # Serialises with itself across pipelines: two Firefly stacks on one shell
+  # runner is both a port fight and a CPU fight.
+  resource_group: firefly-integration
+  interruptible: true
+  timeout: 30m
+  variables:
+    # Overridable in the CI settings. If an upstream release breaks the adapter,
+    # pin a tag here and merges are unblocked without touching this file.
+    FIREFLY_IMAGE: "fireflyiii/core:latest"
+  script:
+    # CI_CONCURRENT_ID is unique per job slot on the runner, so this cannot
+    # collide. Searching for a free port at runtime would be a TOCTOU race.
+    - mkdir -p "$SONARQUBE"
+    - export FIREFLY_HOST_PORT=$((18080 + CI_CONCURRENT_ID))
+    - export COMPOSE_PROJECT_NAME="ffci-${CI_PROJECT_ID}-${CI_CONCURRENT_ID}"
+    - export COMPOSE="docker compose -f ci/firefly-compose.yml"
+    # Reap whatever a killed job left in this slot before starting.
+    - $COMPOSE down -v --remove-orphans --timeout 10 || true
+    - $COMPOSE up -d
+    # Wait for the migrations, not just for the container. /register is the
+    # readiness signal: /login answers 302 until a first user exists, so waiting
+    # for a 200 there never succeeds on a fresh instance.
+    - |
+      for i in $(seq 1 60); do
+        code=$(docker run --rm --label bankingsync.ci=1 --network host curlimages/curl:latest           -s -o /dev/null -w '%{http_code}' --max-time 5           "http://127.0.0.1:${FIREFLY_HOST_PORT}/register" || true)
+        echo "readiness attempt $i: $code"
+        [ "$code" = "200" ] && break
+        sleep 3
+      done
+      [ "$code" = "200" ] || { echo "Firefly never became ready"; exit 1; }
+    # The one setup step with no HTTP equivalent: a fresh instance has no
+    # personal access client, and without one no token can be minted.
+    - $COMPOSE exec -T firefly php artisan passport:client --personal --no-interaction --name=ci --provider=users
+    - export FIREFLY_LIVE_URL="http://127.0.0.1:${FIREFLY_HOST_PORT}"
+    - export FIREFLY_LIVE_RUN_ID="${CI_PIPELINE_ID}-${CI_JOB_ID}"
+    - export FIREFLY_LIVE_DESTRUCTIVE=yes
+    - which gotestsum || go install gotest.tools/gotestsum@latest
+    # Two invocations because the two packages need different filters. The root
+    # package runs the shared sync harness, where "live" is a subtest of every
+    # scenario; ./firefly runs the store-level tests, which are top-level and
+    # cover what the harness has no reason to touch.
+    #
+    # No -race in either: the run is network-bound, so the detector buys nothing
+    # and costs roughly double. The unit-tests job already covers it.
+    - gotestsum --format standard-verbose --junitfile "$SONARQUBE/junit-firefly-live.xml"
+        -- -tags fireflylive -count=1 -timeout 25m -run '/^live$/' .
+    - gotestsum --format standard-verbose --junitfile "$SONARQUBE/junit-firefly-store.xml"
+        -- -tags fireflylive -count=1 -timeout 25m ./firefly/...
+  after_script:
+    # Logs before teardown: a red pipeline whose container is already gone is
+    # unusable. Both lines repeat the project name because GitLab runs
+    # after_script in a separate shell from script.
+    - COMPOSE_PROJECT_NAME="ffci-${CI_PROJECT_ID}-${CI_CONCURRENT_ID}" docker compose -f ci/firefly-compose.yml logs --tail 200 firefly || true
+    - COMPOSE_PROJECT_NAME="ffci-${CI_PROJECT_ID}-${CI_CONCURRENT_ID}" docker compose -f ci/firefly-compose.yml down -v --remove-orphans --timeout 10 || true
+    # Containers from a runner that was killed outright, which after_script never
+    # sees. Reaping by label alone is safe because resource_group serialises this
+    # job against itself and the label belongs to this project: nothing carrying
+    # it can be in use while this runs.
+    #
+    # No age filter. `until` is a prune filter, not a `docker ps` one, so an age
+    # bound here would more likely make the whole command an error swallowed by
+    # `|| true` than actually bound anything — a reaper that silently never reaps.
+    #
+    # -v matters: the Firefly image keeps its storage in a volume, so removing the
+    # container without it leaves an anonymous volume behind on every reap.
+    - |
+      stale=$(docker ps -aq --filter "label=bankingsync.ci=1") || stale=""
+      if [ -n "$stale" ]; then
+        echo "reaping leftover CI containers: $stale"
+        docker rm -f -v $stale || true
+      fi
+    # A job-level after_script REPLACES the one from default:, so the module
+    # cache fixup has to be repeated here or every later job in this build finds
+    # it read-only.
+    - chmod -R u+w "$GOMODCACHE" || true
+  artifacts:
+    when: always
+    reports:
+      junit:
+        - sonarqube/junit-firefly-live.xml
+        - sonarqube/junit-firefly-store.xml
+    expire_in: 7 days
+
+docker-build-dev:
+  stage: docker
+  needs: [unit-tests, go-vet, gofmt, firefly-integration]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  script:
+    - echo "$DOCKER_HUB_TOKEN" | docker login -u "$DOCKER_HUB_USER" --password-stdin
+    - docker buildx create --driver docker-container --use --name ci-builder 2>/dev/null || docker buildx use ci-builder
+    - docker buildx build
+        --sbom=true
+        --push
+        --build-arg VERSION="dev-${MAJOR}.$(date +%-y).$(date +%-V).${CI_PIPELINE_IID}"
+        -t "$DOCKER_HUB_USER/bankingsync:dev"
+        .
+    - docker logout
+  after_script:
+    - docker buildx rm ci-builder 2>/dev/null || true
+    - docker logout || true
+
+docker-build-push:
+  stage: docker
+  needs: [unit-tests]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - VERSION="${MAJOR}.$(date +%-y).$(date +%-V).${CI_PIPELINE_IID}"
+    - echo "Building version ${VERSION}"
+    - echo "$DOCKER_HUB_TOKEN" | docker login -u "$DOCKER_HUB_USER" --password-stdin
+    - docker buildx create --driver docker-container --use --name ci-builder 2>/dev/null || docker buildx use ci-builder
+    - docker buildx build
+        --sbom=true
+        --push
+        --build-arg VERSION="$VERSION"
+        -t "$DOCKER_HUB_USER/bankingsync:$VERSION"
+        -t "$DOCKER_HUB_USER/bankingsync:latest"
+        .
+    - docker logout
+    - git tag "$VERSION" "$CI_COMMIT_SHA" 2>/dev/null || true
+    - git push "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "$VERSION" 2>/dev/null || true
+
+  after_script:
+    - docker buildx rm ci-builder 2>/dev/null || true
+    - docker logout || true
+
+gofmt:
+  stage: sast
+  needs: []
+  script:
+    - |
+      unformatted=$(gofmt -l .)
+      if [ -n "$unformatted" ]; then
+        echo "The following files are not gofmt'd:"
+        echo "$unformatted"
+        exit 1
+      fi

@@ -1,0 +1,28 @@
+[
+  {
+    "status": "BOOK",
+    "date": "2026-07-01",
+    "amount_cents": -4217,
+    "currency": "EUR",
+    "payee": "Acme GmbH",
+    "notes": "Rechnung 1001",
+    "entry_ref": "ref-0000a1b2c3d4",
+    "counterparty_iban": "DE12123456789000000001",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  },
+  {
+    "status": "BOOK",
+    "date": "2026-07-03",
+    "amount_cents": 120000,
+    "currency": "EUR",
+    "payee": "Beispiel AG",
+    "notes": "Gutschrift Teil 2",
+    "entry_ref": "ref-0000b2c3d4e5",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  }
+]

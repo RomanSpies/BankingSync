@@ -1,0 +1,49 @@
+{{template "base.html" .}}
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Set Opening Balance</h1>
+    <p class="page-sub">{{.Preview.BankName}}{{if .Preview.BudgetAccount}} &middot; {{.Preview.BudgetAccount}}{{end}}</p>
+  </div>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error"><span>{{.Error}}</span></div>
+<a class="btn btn-ghost" href="/status">Back</a>
+{{else if .Preview.Refusal}}
+<div class="alert alert-error"><span>{{.Preview.Refusal}}</span></div>
+<a class="btn btn-ghost" href="/status">Back</a>
+{{else}}
+<div class="tbl-wrap">
+  <table>
+    <thead>
+      <tr><th scope="col">Figure</th><th scope="col">Value</th></tr>
+    </thead>
+    <tbody>
+      <tr><th scope="row" class="td-main">Balance reported by the bank</th><td class="mono">{{.Preview.BankCents}} ({{.Preview.Currency}}, {{.Preview.BalanceType}}{{if .Preview.ReferenceDate}} as of {{.Preview.ReferenceDate}}{{end}})</td></tr>
+      <tr><th scope="row" class="td-main">Already imported into the budget</th><td class="mono">{{.Preview.ImportedCents}}</td></tr>
+      <tr><th scope="row" class="td-main"><strong>Opening balance to write</strong></th><td class="mono"><strong>{{.Preview.OpeningCents}}</strong> dated {{.Preview.OpeningDate}}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="alert alert-info">
+  <span>This is written once. BankingSync will never adjust it again &mdash; later differences are reported, not corrected.</span>
+</div>
+
+{{if .Preview.AvailableBalance}}
+<div class="alert alert-error">
+  <span>Your bank reports no booked balance, so this figure comes from an <strong>available</strong> balance ({{.Preview.BalanceType}}). If your account has an overdraft, that balance includes the credit line and this opening balance will be too high by that amount. Compare it against your banking app before confirming.</span>
+</div>
+{{end}}
+
+<form method="POST" action="/opening-balance">
+  <input type="hidden" name="account_id" value="{{.Preview.AccountID}}">
+  <input type="hidden" name="expected_cents" value="{{.Preview.OpeningCents}}">
+  <div class="actions mt-lg">
+    <button type="submit" class="btn btn-primary">Write it</button>
+    <a class="btn btn-ghost" href="/status">Cancel</a>
+  </div>
+</form>
+{{end}}
+{{end}}

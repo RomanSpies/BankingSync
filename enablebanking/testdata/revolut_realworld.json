@@ -1,0 +1,104 @@
+{
+  "continuation_key": null,
+  "transactions": [
+    {
+      "balance_after_transaction": null,
+      "bank_transaction_code": {
+        "code": "Dauerauftrag",
+        "description": null,
+        "sub_code": null
+      },
+      "booking_date": "2026-07-20",
+      "credit_debit_indicator": "CRDT",
+      "creditor": {
+        "contact_details": null,
+        "name": null,
+        "organisation_id": null,
+        "postal_address": null,
+        "private_id": null
+      },
+      "creditor_account": null,
+      "creditor_account_additional_identification": null,
+      "creditor_agent": null,
+      "debtor": {
+        "contact_details": null,
+        "name": "Beispielmarkt",
+        "organisation_id": null,
+        "postal_address": null,
+        "private_id": null
+      },
+      "debtor_account": {
+        "iban": "DE77123456789005193987",
+        "other": null
+      },
+      "debtor_account_additional_identification": null,
+      "debtor_agent": null,
+      "entry_reference": "ref-826e798366e1",
+      "exchange_rate": null,
+      "merchant_category_code": null,
+      "note": null,
+      "reference_number": null,
+      "reference_number_schema": null,
+      "remittance_information": [
+        "Kartenzahlung",
+        "Abonnement"
+      ],
+      "status": "BOOK",
+      "transaction_amount": {
+        "amount": "48.49",
+        "currency": "EUR"
+      },
+      "transaction_date": null,
+      "transaction_id": null,
+      "value_date": "2026-07-20"
+    },
+    {
+      "balance_after_transaction": null,
+      "bank_transaction_code": {
+        "code": "Erstattung",
+        "description": null,
+        "sub_code": null
+      },
+      "booking_date": "2026-07-20",
+      "credit_debit_indicator": "DBIT",
+      "creditor": {
+        "contact_details": null,
+        "name": null,
+        "organisation_id": null,
+        "postal_address": null,
+        "private_id": null
+      },
+      "creditor_account": null,
+      "creditor_account_additional_identification": null,
+      "creditor_agent": null,
+      "debtor": {
+        "contact_details": null,
+        "name": null,
+        "organisation_id": null,
+        "postal_address": null,
+        "private_id": null
+      },
+      "debtor_account": null,
+      "debtor_account_additional_identification": null,
+      "debtor_agent": null,
+      "entry_reference": "ref-26bb4210def2",
+      "exchange_rate": null,
+      "merchant_category_code": null,
+      "note": null,
+      "reference_number": null,
+      "reference_number_schema": null,
+      "remittance_information": [
+        "Gutschrift",
+        "Lastschrift Beitrag"
+      ],
+      "status": "BOOK",
+      "transaction_amount": {
+        "amount": "153.99",
+        "currency": "EUR"
+      },
+      "transaction_date": null,
+      "transaction_id": null,
+      "value_date": "2026-07-20"
+    }
+  ]
+}

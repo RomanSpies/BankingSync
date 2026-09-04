@@ -1,0 +1,81 @@
+{{template "base.html" .}}
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Select Account</h1>
+    <p class="page-sub">{{.BankName}}{{if .BankCountry}} · {{.BankCountry}}{{end}}</p>
+  </div>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  </span>
+  <span>{{.Error}}</span>
+</div>
+{{end}}
+
+<div class="alert alert-info">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+  </span>
+  <span>Choose the bank account to sync and the {{.BackendLabel}} account it should import into.</span>
+</div>
+
+<form method="POST" action="/pick-account">
+  <input type="hidden" name="session_id" value="{{.SessionID}}">
+  <input type="hidden" name="bank_name" value="{{.BankName}}">
+  <input type="hidden" name="bank_country" value="{{.BankCountry}}">
+  <input type="hidden" name="expiry" value="{{.Expiry}}">
+
+  <p class="section-label">Available accounts</p>
+
+  {{range .Accounts}}
+  <label class="acct-card">
+    <input type="radio" name="account_uid" value="{{.EffectiveUID}}" data-suggest="{{.Suggested}}" required>
+    <div>
+      <div style="font-size:.88rem;font-weight:500;color:var(--text)">{{.Label}}</div>
+      {{with .Describe}}<div style="font-size:.75rem;color:var(--muted);margin-top:.15rem">{{.}}</div>{{end}}
+      {{if ne .Label .EffectiveUID}}<span class="acct-uid">{{.EffectiveUID}}</span>{{end}}
+    </div>
+  </label>
+  {{end}}
+
+  <hr class="divider">
+
+  <div class="field">
+    <label for="target-account">{{.BackendLabel}} Account</label>
+    <input type="text" id="target-account" name="actual_account" value="{{.DefaultAccount}}" placeholder="Leave empty to name it after the bank account" list="known-accounts">
+    <datalist id="known-accounts">{{range .KnownAccounts}}<option value="{{.}}"></option>{{end}}</datalist>
+    <p class="field-hint">The account name in {{.BackendLabel}} where transactions from this bank will be imported. Pick an existing one where possible &mdash; a new name creates a new account. Left empty, it is named after the bank account you selected above.{{if .RenameSafe}} You can rename it in {{.BackendLabel}} later; it is matched by IBAN, not by name.{{end}}</p>
+  </div>
+
+  <div class="field">
+    <label for="start-sync-date">Import transactions from</label>
+    <input id="start-sync-date" type="date" name="start_sync_date" value="{{.DefaultStartDate}}">
+    <p class="field-hint">Transactions from this date onwards will be imported on the first sync. Leave as-is for the last 30 days.</p>
+  </div>
+
+  <div class="mt-lg">
+    <button type="submit" class="btn btn-primary">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+      Use this account
+    </button>
+  </div>
+</form>
+
+<script>
+(function () {
+  var field = document.getElementById('target-account');
+  if (!field) return;
+  var edited = field.value !== '';
+  field.addEventListener('input', function () { edited = true; });
+  document.querySelectorAll('input[name="account_uid"]').forEach(function (radio) {
+    radio.addEventListener('change', function () {
+      if (!edited) field.value = radio.dataset.suggest || '';
+    });
+  });
+})();
+</script>
+{{end}}

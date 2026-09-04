@@ -1,0 +1,21 @@
+{
+  "transactions": [
+    {
+      "entry_reference": "ref-0000b8c9d0e1",
+      "booking_date": "2026-07-09",
+      "status": "BOOK",
+      "transaction_amount": { "amount": "-153.99", "currency": "EUR" },
+      "creditor": { "name": "Rhein Logistik" },
+      "remittance_information": ["Lastschrift Beitrag"]
+    },
+    {
+      "entry_reference": "ref-0000c9d0e1f2",
+      "booking_date": "2026-07-09",
+      "status": "BOOK",
+      "transaction_amount": { "amount": "1200.00", "currency": "EUR" },
+      "debtor": { "name": "Beispiel AG" },
+      "remittance_information": ["Gutschrift"]
+    }
+  ],
+  "continuation_key": ""
+}

@@ -1,0 +1,79 @@
+{{template "base.html" .}}
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Matching parameters</h1>
+    <p class="page-sub">What the matcher believes about your banks, and whether the answers you have given support believing something else</p>
+  </div>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  </span>
+  <span>{{.Error}}</span>
+</div>
+{{end}}
+
+{{if .Saved}}
+<div class="alert alert-info"><span>{{.Saved}}</span></div>
+{{end}}
+
+<p class="section-label">In force</p>
+<p class="field-hint">
+  <span class="mono">{{.View.InForce}}</span> &mdash;
+  {{if .View.Fitted}}fitted from your own settled decisions.{{else}}the parameters this version shipped with.{{end}}
+  This is the <span class="mono">param_version</span> the matching metrics are labelled with.
+</p>
+
+{{if eq .View.Labelled 0}}
+<div class="empty">
+  <div class="empty-icon">&#8212;</div>
+  <p class="empty-title">Nothing to fit to</p>
+  <p class="empty-desc">Parameters can only be estimated from decisions something other than the matcher has settled &mdash; a review you answered, a pair your bank's own reference confirmed, or a confirmation you were asked for. There are none yet, and for most installations there never will be. That is not a problem: the shipped parameters are stated claims about how banks behave, not a placeholder.</p>
+</div>
+{{else}}
+
+<hr class="divider">
+<p class="section-label">Candidate</p>
+<p class="field-hint">
+  <span class="mono">{{.View.Candidate}}</span>, fitted to {{.View.Labelled}} settled decision(s).
+</p>
+
+{{range .View.Checks}}
+<div class="acct-card" style="cursor:default">
+  <div>
+    <div style="font-size:.88rem;font-weight:500;color:var(--text)">
+      <span class="badge {{if eq .Status "passed"}}badge-green{{else if eq .Status "failed"}}badge-red{{else}}badge-yellow{{end}}">{{.Status}}</span>
+      {{.Name}}
+    </div>
+    <div style="font-size:.75rem;color:var(--muted);margin-top:.15rem">{{.Detail}}</div>
+  </div>
+</div>
+{{end}}
+
+<p class="field-hint">
+  &ldquo;For a person&rdquo; is not a check that passed. It is the finding this page exists to put in front of you: how many decisions would have gone differently is a fact, and whether that many is acceptable is a judgement nothing here is entitled to make.
+</p>
+
+<form method="POST" action="/matching/apply">
+  <input type="hidden" name="param_version" value="{{.View.Candidate}}">
+  <div class="actions mt">
+    {{if .View.Watching}}
+    <button type="submit" class="btn {{if .View.Promotable}}btn-primary{{else}}btn-ghost{{end}}" name="action" value="promote"{{if not .View.Promotable}} disabled{{end}}>Put into force</button>
+    <button type="submit" class="btn btn-ghost" name="action" value="stop">Stop watching</button>
+    {{else}}
+    <button type="submit" class="btn btn-primary" name="action" value="watch">Watch these alongside</button>
+    {{end}}
+    {{if .View.Fitted}}
+    <button type="submit" class="btn btn-ghost" name="action" value="revert">Back to the shipped parameters</button>
+    {{end}}
+  </div>
+</form>
+
+{{if not .View.Watching}}
+<p class="field-hint">Watching changes nothing. Each sync works out what these parameters would have decided, alongside what the ones in force actually decided, and records the difference. Nothing can be put into force until it has been watched, because otherwise there is no record of what it would have changed.</p>
+{{end}}
+{{end}}
+{{end}}

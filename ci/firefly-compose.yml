@@ -1,0 +1,32 @@
+# A throwaway Firefly III for the integration job. Everything here is destroyed
+# with `down -v` afterwards, which is what lets the tests namespace accounts per
+# run rather than clean up after themselves.
+---
+services:
+  firefly:
+    image: "${FIREFLY_IMAGE:-fireflyiii/core:latest}"
+    # SQLite, so there is no second container. Firefly supports it officially and
+    # creates storage/database/database.sqlite itself — verified against the
+    # image. A MariaDB alongside would be the single largest part of the startup
+    # time for a database that is thrown away four minutes later.
+    environment:
+      # Fixed on purpose. The key encrypts data in a database that exists for the
+      # length of one job; generating one per run would add an openssl dependency
+      # to the runner for no gain.
+      APP_KEY: SomeRandomStringOf32CharsExactly
+      DB_CONNECTION: sqlite
+      APP_URL: "http://127.0.0.1:${FIREFLY_HOST_PORT}"
+      SITE_OWNER: ci@example.invalid
+      # Deliberately west of UTC. Firefly renders dates in the server's own zone,
+      # so a positive offset makes UTC midnight land on the same calendar day and
+      # hides an entire class of date bug — one of which was live in this
+      # repository until a real instance surfaced it. A negative offset is the
+      # strict case: passing it implies passing the eastern one.
+      TZ: America/New_York
+    # Bound to loopback, never 0.0.0.0: the runner is a real host and this
+    # instance has no authentication worth the name during the seconds before the
+    # first user is created.
+    ports:
+      - "127.0.0.1:${FIREFLY_HOST_PORT}:8080"
+    labels:
+      - "bankingsync.ci=1"

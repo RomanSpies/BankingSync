@@ -1,0 +1,28 @@
+[
+  {
+    "status": "BOOK",
+    "date": "2026-07-20",
+    "amount_cents": 4849,
+    "currency": "EUR",
+    "payee": "Beispielmarkt",
+    "notes": "Kartenzahlung Abonnement",
+    "entry_ref": "ref-826e798366e1",
+    "counterparty_iban": "DE77123456789005193987",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  },
+  {
+    "status": "BOOK",
+    "date": "2026-07-20",
+    "amount_cents": -15399,
+    "currency": "EUR",
+    "payee": "Gutschrift",
+    "notes": "Gutschrift Lastschrift Beitrag",
+    "entry_ref": "ref-26bb4210def2",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  }
+]

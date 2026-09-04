@@ -1,0 +1,80 @@
+{{template "base.html" .}}
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Settings</h1>
+    <p class="page-sub">Matching and alerting policy</p>
+  </div>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error"><span>{{.Error}}</span></div>
+{{end}}
+{{if .Saved}}
+<div class="alert alert-info"><span>Settings saved.</span></div>
+{{end}}
+
+<form method="POST" action="/settings">
+  <p class="section-label">Pre-authorisation matching</p>
+
+  <div class="field">
+    <label for="tolerance-pct">Amount tolerance (percent)</label>
+    <input id="tolerance-pct" type="number" name="match_amount_tolerance_pct" value="{{.TolerancePercent}}" min="0" max="100" required>
+    <p class="field-hint">How far the booked amount may differ from the authorisation and still count as the same purchase. Set to 0 to require an exact amount.</p>
+  </div>
+
+  <div class="field">
+    <label for="tolerance-cap">Amount tolerance cap (cents)</label>
+    <input id="tolerance-cap" type="number" name="match_amount_tolerance_max_cents" value="{{.ToleranceCents}}" min="0" required>
+    <p class="field-hint">Upper limit in cents, whichever is smaller. Without it, 25&#37; of a large payment would be a very wide window. 5000 = 50.00.</p>
+  </div>
+
+  <div class="field">
+    <label for="payee-prefixes">Card scheme prefixes</label>
+    <input id="payee-prefixes" type="text" name="match_payee_prefixes" value="{{.PayeePrefixes}}">
+    <p class="field-hint">Comma-separated. Ignored when comparing payees, because many banks prefix the booked name but not the pending one. Only affects comparison &mdash; what the bank sends is still what gets written.</p>
+  </div>
+
+  <hr class="divider">
+  <p class="section-label">Decision thresholds</p>
+
+  <div class="field">
+    <label for="auto-probability">Merge automatically from (percent)</label>
+    <input id="auto-probability" type="number" name="match_auto_probability" value="{{.AutoProbability}}" min="1" max="100" required>
+    <p class="field-hint">How confident the matcher must be that a booking is the settlement of an existing row before it merges the two without asking. Raising it means more cases land in the review queue; lowering it means more are decided for you.</p>
+  </div>
+
+  <div class="field">
+    <label for="review-probability">Ask from (percent)</label>
+    <input id="review-probability" type="number" name="match_review_probability" value="{{.ReviewProbability}}" min="1" max="100" required>
+    <p class="field-hint">Below this the booking is treated as a new transaction and imported. Between the two it is held back and listed under Review &mdash; nothing is written to the budget until you decide. Must not be above the value above it; setting the two equal leaves only genuine ties to be asked about.</p>
+  </div>
+
+  <div class="field">
+    <label for="match-overlap">Expect a counterpart in (percent of cases)</label>
+    <input id="match-overlap" type="number" name="match_overlap_pct" value="{{.MatchOverlap}}" min="1" max="99" required>
+    <p class="field-hint">How often a transaction that reaches the matcher turns out to be the settlement of a row you already have, rather than something new. Most bookings never reach the matcher at all &mdash; the bank&rsquo;s own reference settles them first &mdash; so this is about the ones left over. It is a claim about your bank, not a measurement: raising it makes the matcher readier to pair, lowering it makes it readier to import as new. Fifty is what the program assumed before it could be set.</p>
+  </div>
+
+  <div class="field">
+    <label for="ask-when-unsure">
+      <input id="ask-when-unsure" type="checkbox" name="match_ask_when_unsure" value="1"{{if .AskWhenUnsure}} checked{{end}}>
+      Ask about one automatic decision per sync
+    </label>
+    <p class="field-hint">Most transactions are decided without you, and nobody ever finds out whether those decisions were right &mdash; which is where the expensive mistakes are. With this on, each sync picks the single decision whose answer would tell the matcher the most and asks about it under Review. Your budget is not affected either way and nothing waits on the answer. There is always an &ldquo;I cannot say&rdquo;; use it rather than guessing, because a guessed answer teaches the matcher something false.</p>
+  </div>
+
+  <hr class="divider">
+  <p class="section-label">Balance drift</p>
+
+  <div class="field">
+    <label for="drift-threshold">Alert threshold (cents)</label>
+    <input id="drift-threshold" type="number" name="balance_drift_notify_cents" value="{{.DriftNotifyCents}}" min="0" required>
+    <p class="field-hint">Email when the budget and the bank disagree by more than this, and only when it persists across two consecutive syncs. 0 disables the email; the difference is still logged and exposed on /health.</p>
+  </div>
+
+  <div class="mt-lg">
+    <button type="submit" class="btn btn-primary">Save</button>
+  </div>
+</form>
+{{end}}

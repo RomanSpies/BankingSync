@@ -1,0 +1,28 @@
+[
+  {
+    "status": "BOOK",
+    "date": "2026-07-07",
+    "amount_cents": -500,
+    "currency": "EUR",
+    "payee": "Testverlag",
+    "notes": "",
+    "entry_ref": "ref-0000f6a7b8c9",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  },
+  {
+    "status": "BOOK",
+    "date": "2026-07-08",
+    "amount_cents": -725,
+    "currency": "EUR",
+    "payee": "Dauerauftrag",
+    "notes": "Dauerauftrag",
+    "entry_ref": "ref-0000a7b8c9d0",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  }
+]

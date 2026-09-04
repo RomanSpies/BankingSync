@@ -1,0 +1,91 @@
+services:
+  actual:
+    image: actualbudget/actual-server:latest
+    container_name: actual
+    restart: always
+    expose:
+      - "5006"
+    volumes:
+      - actual_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "node src/scripts/health-check.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      actual_net:
+        ipv4_address: 172.30.5.10
+
+  bridge-bank:
+    image: romanspies/bankingsync:latest
+    container_name: bridge-bank
+    restart: always
+    depends_on:
+      actual:
+        condition: service_healthy
+
+    expose:
+      - "8443"
+
+    volumes:
+      - bridge_bank_data:/data
+
+    environment:
+      ACTUAL_URL: "http://actual:5006"
+      ACTUAL_PASSWORD: "redacted"
+      ACTUAL_SYNC_ID: "redacted"
+      ACTUAL_ACCOUNT: "redacted"
+
+      EB_APPLICATION_ID: "redacted"
+
+      SYNC_INTERVAL_HOURS: "4"
+
+      ACCOUNT_HOLDER_NAME: "YourName YourSurname, YourSurname YourName"
+      ACTUAL_INSECURE_TLS: "false"
+
+      # --- Firefly III instead of Actual Budget ---
+      # Replace ACTUAL_URL / ACTUAL_PASSWORD / ACTUAL_SYNC_ID with these, and
+      # drop the depends_on entry for the actual service further up.
+      # BUDGET_BACKEND: "firefly"
+      # FIREFLY_URL: "http://firefly:8080"
+      # FIREFLY_TOKEN: "your-personal-access-token"
+      # FIREFLY_ACCOUNT: "Checking"
+      # FIREFLY_PENDING_TAG: "pending"
+      # FIREFLY_APPLY_RULES: "true"
+      # FIREFLY_FIRE_WEBHOOKS: "false"
+      # FIREFLY_INSECURE_TLS: "false"
+      #
+      # Switching an existing installation between backends additionally needs
+      # BUDGET_BACKEND_MIGRATE: "true" for one start. See README.
+      # EB_REQUEST_BALANCE_ACCESS: "false"  # only if your bank rejects balance consent
+      NOTIFY_EMAIL: ""
+      SMTP_HOST: ""
+      SMTP_PORT: "587"
+      SMTP_USER: ""
+      SMTP_PASS: ""
+
+      OTLP_ENDPOINT: "yourotlp"
+
+      PYROSCOPE_SERVER_ADDRESS: ""
+      PYROSCOPE_BASIC_AUTH_USER: ""
+      PYROSCOPE_BASIC_AUTH_PASSWORD: ""
+
+    networks:
+      actual_net:
+        ipv4_address: 172.30.5.11
+
+
+volumes:
+  actual_data:
+  bridge_bank_data:
+
+networks:
+  actual_net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-actual
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+          ip_range: 172.30.5.0/24
+          gateway: 172.30.5.254

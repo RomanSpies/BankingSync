@@ -1,0 +1,15 @@
+[
+  {
+    "status": "PDNG",
+    "date": "2026-07-04",
+    "amount_cents": -999,
+    "currency": "EUR",
+    "payee": "Contoso Ltd",
+    "notes": "Kartenzahlung",
+    "entry_ref": "ref-0000c3d4e5f6",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  }
+]

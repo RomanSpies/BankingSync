@@ -1,0 +1,14 @@
+{
+  "transactions": [
+    {
+      "entry_reference": "ref-0000c3d4e5f6",
+      "transaction_date": "2026-07-04",
+      "status": "PDNG",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "amount": "9.99", "currency": "EUR" },
+      "creditor": { "name": "Contoso Ltd" },
+      "remittance_information": ["Kartenzahlung"]
+    }
+  ],
+  "continuation_key": ""
+}

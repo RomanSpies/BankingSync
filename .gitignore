@@ -1,0 +1,22 @@
+# Runtime data (private key, SQLite cache, state)
+/data/
+
+# Go build artifacts
+/bankingsync
+/actual-sync
+
+# Test coverage
+coverage.out
+coverage.xml
+
+# CI report artifacts
+sonarqube/
+gl-dependency-scanning-report.json
+
+# Go tool cache (pinned inside project by CI)
+.cache/
+
+# Editor
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,15 @@
+[
+  {
+    "status": "BOOK",
+    "date": "2026-07-06",
+    "amount_cents": 2550,
+    "currency": "EUR",
+    "payee": "Nordwind Energie",
+    "notes": "Erstattung",
+    "entry_ref": "ref-0000e5f6a7b8",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  }
+]

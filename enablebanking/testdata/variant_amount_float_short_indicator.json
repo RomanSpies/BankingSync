@@ -1,0 +1,14 @@
+{
+  "transactions": [
+    {
+      "entry_reference": "ref-0000e5f6a7b8",
+      "transaction_date": "2026-07-06",
+      "status": "BOOK",
+      "credit_debit_indic": "CRDT",
+      "transaction_amount": { "amount": 25.5, "currency": "EUR" },
+      "debtor_name": "Nordwind Energie",
+      "remittance_information": "Erstattung"
+    }
+  ],
+  "continuation_key": ""
+}

@@ -1,0 +1,23 @@
+{
+  "transactions": [
+    {
+      "entry_reference": "ref-0000d0e1f2a3",
+      "booking_date": "2026-07-10",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "amount": "845.00", "currency": "EUR" },
+      "creditor": { "name": null },
+      "remittance_information": ["EREF+2026070100123456 MREF+M-4711 CRED+DE98ZZZ09999999999 SVWZ+Miete Januar 2026"]
+    },
+    {
+      "entry_reference": "ref-0000e1f2a3b4",
+      "booking_date": "2026-07-11",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "amount": "62.40", "currency": "EUR" },
+      "creditor": { "name": "Nordwind Energie" },
+      "remittance_information": ["EREF+ABSCHLAG0726 SVWZ+Stromabschlag Kundennr 55123"]
+    }
+  ],
+  "continuation_key": ""
+}

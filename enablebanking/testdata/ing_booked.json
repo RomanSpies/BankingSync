@@ -1,0 +1,26 @@
+{
+  "transactions": [
+    {
+      "entry_reference": "ref-0000a1b2c3d4",
+      "transaction_date": "2026-07-01",
+      "booking_date": "2026-07-02",
+      "value_date": "2026-07-02",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "amount": "42.17", "currency": "EUR" },
+      "creditor": { "name": "Acme GmbH" },
+      "creditor_account": { "iban": "DE12123456789000000001" },
+      "remittance_information": ["Rechnung 1001"]
+    },
+    {
+      "entry_reference": "ref-0000b2c3d4e5",
+      "transaction_date": "2026-07-03",
+      "status": "BOOK",
+      "credit_debit_indicator": "CRDT",
+      "transaction_amount": { "amount": "1200.00", "currency": "EUR" },
+      "debtor": { "name": "Beispiel AG" },
+      "remittance_information": ["Gutschrift", "Teil 2"]
+    }
+  ],
+  "continuation_key": ""
+}

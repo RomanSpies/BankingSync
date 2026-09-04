@@ -1,0 +1,28 @@
+[
+  {
+    "status": "BOOK",
+    "date": "2026-07-09",
+    "amount_cents": -15399,
+    "currency": "EUR",
+    "payee": "Rhein Logistik",
+    "notes": "Lastschrift Beitrag",
+    "entry_ref": "ref-0000b8c9d0e1",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  },
+  {
+    "status": "BOOK",
+    "date": "2026-07-09",
+    "amount_cents": 120000,
+    "currency": "EUR",
+    "payee": "Beispiel AG",
+    "notes": "Gutschrift",
+    "entry_ref": "ref-0000c9d0e1f2",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  }
+]

@@ -1,0 +1,22 @@
+{
+  "transactions": [
+    {
+      "entry_reference": "ref-0000f6a7b8c9",
+      "transaction_date": "",
+      "booking_date": "2026-07-07",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "amount": "5.00", "currency": "EUR" },
+      "creditor": { "name": "Testverlag" }
+    },
+    {
+      "entry_reference": "ref-0000a7b8c9d0",
+      "value_date": "2026-07-08T14:30:00",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "amount": "7.25", "currency": "EUR" },
+      "remittance_information": ["Dauerauftrag"]
+    }
+  ],
+  "continuation_key": ""
+}

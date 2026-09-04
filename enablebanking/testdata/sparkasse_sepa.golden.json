@@ -1,0 +1,28 @@
+[
+  {
+    "status": "BOOK",
+    "date": "2026-07-10",
+    "amount_cents": -84500,
+    "currency": "EUR",
+    "payee": "Miete Januar 2026",
+    "notes": "Miete Januar 2026",
+    "entry_ref": "ref-0000d0e1f2a3",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "2026070100123456",
+    "sepa_mandate": "M-4711",
+    "sepa_creditor_id": "DE98ZZZ09999999999"
+  },
+  {
+    "status": "BOOK",
+    "date": "2026-07-11",
+    "amount_cents": -6240,
+    "currency": "EUR",
+    "payee": "Nordwind Energie",
+    "notes": "Stromabschlag Kundennr 55123",
+    "entry_ref": "ref-0000e1f2a3b4",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "ABSCHLAG0726",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  }
+]

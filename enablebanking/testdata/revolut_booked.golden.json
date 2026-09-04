@@ -1,0 +1,15 @@
+[
+  {
+    "status": "BOOK",
+    "date": "2026-07-05",
+    "amount_cents": -1540,
+    "currency": "EUR",
+    "payee": "Muster Handel",
+    "notes": "Abonnement",
+    "entry_ref": "ref-0000d4e5f6a7",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  }
+]

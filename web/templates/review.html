@@ -1,0 +1,146 @@
+{{template "base.html" .}}
+{{define "content"}}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">Review</h1>
+    <p class="page-sub">Transactions the matcher would not decide on its own</p>
+  </div>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  </span>
+  <span>{{.Error}}</span>
+</div>
+{{end}}
+
+{{if .Inquiry}}
+<hr class="divider">
+<p class="section-label">One question about a decision made without you</p>
+<div class="alert alert-info">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+  </span>
+  <span>Your budget is already up to date &mdash; this changes nothing either way. The matcher decides most transactions on its own and never finds out whether it was right, and this is the one case per sync where knowing would teach it the most.</span>
+</div>
+
+<div class="acct-card" style="cursor:default">
+  <div>
+    <div style="font-size:.88rem;font-weight:500;color:var(--text)">
+      {{if .Inquiry.Payee}}{{.Inquiry.Payee}}{{else}}<span style="color:var(--muted)">no payee</span>{{end}}
+      <span class="mono" style="color:var(--muted);font-weight:400"> &middot; {{.Inquiry.Amount}} {{.Inquiry.Currency}} &middot; {{.Inquiry.Date}}</span>
+    </div>
+    <div style="font-size:.75rem;color:var(--muted);margin-top:.15rem">from {{.Inquiry.BankName}}{{if .Inquiry.AskedAt}} &middot; asked {{.Inquiry.AskedAt}}{{end}}</div>
+  </div>
+</div>
+
+<div class="acct-card" style="cursor:default">
+  <div>
+    <div style="font-size:.88rem;font-weight:500;color:var(--text)">
+      {{if .Inquiry.CandidatePayee}}{{.Inquiry.CandidatePayee}}{{else}}<span style="color:var(--muted)">no payee</span>{{end}}
+      <span class="mono" style="color:var(--muted);font-weight:400"> &middot; {{.Inquiry.CandidateAmount}} &middot; {{.Inquiry.CandidateDate}}</span>
+    </div>
+    <div style="font-size:.75rem;color:var(--muted);margin-top:.15rem">
+      <span class="badge {{if ge .Inquiry.Percent 75}}badge-green{{else if ge .Inquiry.Percent 60}}badge-yellow{{else}}badge-red{{end}}">{{.Inquiry.Percent}}&#37;</span>
+      {{.Inquiry.Why}}
+    </div>
+  </div>
+</div>
+
+<p class="field-hint">
+  {{if .Inquiry.Merged}}These were treated as one payment and merged.{{else}}These were treated as two separate payments and both kept.{{end}}
+  Were they the same payment?
+</p>
+
+<form method="POST" action="/review/confirm">
+  <input type="hidden" name="inquiry_id" value="{{.Inquiry.ID}}">
+  <input type="hidden" name="param_version" value="{{.Inquiry.ParamVersion}}">
+  <div class="actions mt">
+    <button type="submit" class="btn btn-primary" name="answer" value="yes">Yes, one payment</button>
+    <button type="submit" class="btn btn-ghost" name="answer" value="no">No, two payments</button>
+    <button type="submit" class="btn btn-ghost" name="answer" value="unknown">I cannot say</button>
+  </div>
+</form>
+{{end}}
+
+{{if .Items}}
+<div class="alert alert-info">
+  <span class="alert-icon">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+  </span>
+  <span>These are not in your budget yet, and will not be until you decide. Either they belong to a transaction already there, or they are new.</span>
+</div>
+
+{{range .Items}}
+<hr class="divider">
+<p class="section-label">{{.Payee}} &middot; <span class="mono">{{.Amount}} {{.Currency}}</span> &middot; {{.Date}}</p>
+<p class="field-hint" style="margin-top:-.4rem">{{.BankName}}{{if .BudgetAccount}} &rarr; {{.BudgetAccount}}{{end}}{{if .HeldAt}} &middot; held {{.HeldAt}}{{end}}</p>
+
+{{if .Unavailable}}
+<div class="alert alert-warn"><span>{{.Unavailable}}</span></div>
+{{end}}
+
+<form method="POST" action="/review/resolve">
+  <input type="hidden" name="review_id" value="{{.ID}}">
+  <input type="hidden" name="param_version" value="{{.ParamVersion}}">
+
+  {{range .Candidates}}
+  <label class="acct-card">
+    <input type="radio" name="candidate_id" value="{{.ID}}" data-percent="{{.Percent}}" required>
+    <div>
+      <div style="font-size:.88rem;font-weight:500;color:var(--text)">
+        {{if .PayeeName}}{{.PayeeName}}{{else}}<span style="color:var(--muted)">no payee</span>{{end}}
+        <span class="mono" style="color:var(--muted);font-weight:400"> &middot; {{.Amount}} &middot; {{.Date}}</span>
+      </div>
+      <div style="font-size:.75rem;color:var(--muted);margin-top:.15rem">
+        <span class="badge {{if ge .Percent 75}}badge-green{{else if ge .Percent 60}}badge-yellow{{else}}badge-red{{end}}">{{.Percent}}&#37;</span>
+        {{.Why}}
+      </div>
+    </div>
+  </label>
+  {{end}}
+
+  <label class="acct-card">
+    <input type="radio" name="candidate_id" value="" required>
+    <div>
+      <div style="font-size:.88rem;font-weight:500;color:var(--text)">None of these &mdash; it is a new transaction</div>
+      <div style="font-size:.75rem;color:var(--muted);margin-top:.15rem">Import it into the budget on its own.</div>
+    </div>
+  </label>
+
+  <input type="hidden" name="shown_percent" value="0">
+
+  <div class="actions mt">
+    <button type="submit" class="btn btn-primary">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+      Apply
+    </button>
+  </div>
+</form>
+{{end}}
+
+{{else if and (not .Error) (not .Inquiry)}}
+<div class="empty">
+  <div class="empty-icon">✓</div>
+  <p class="empty-title">Nothing waiting</p>
+  <p class="empty-desc">Every transaction so far was clear enough to decide without you.</p>
+  <a class="btn btn-ghost" href="/status">Back to the dashboard</a>
+</div>
+{{end}}
+
+<script>
+// The percentage travels with the choice so the server can refuse a decision
+// made against a page that has since gone stale — a candidate may have been
+// edited or deleted between the page being drawn and the button being pressed.
+document.querySelectorAll('form[action="/review/resolve"]').forEach(function (form) {
+  var shown = form.querySelector('input[name="shown_percent"]');
+  form.querySelectorAll('input[name="candidate_id"]').forEach(function (radio) {
+    radio.addEventListener('change', function () {
+      shown.value = radio.dataset.percent || '0';
+    });
+  });
+});
+</script>
+{{end}}
