@@ -46,6 +46,11 @@ type BankAccount struct {
 	IBAN          string
 	Currency      string
 
+	// IdentificationHash identifies the account across sessions and is what a
+	// renewal matches on. Empty until the account's next renewal for rows
+	// created before it was recorded.
+	IdentificationHash string
+
 	OpeningBalanceState     string
 	OpeningBalanceCents     int64
 	OpeningBalanceDate      string
@@ -59,15 +64,16 @@ type BankAccount struct {
 
 // NewBankAccount carries the fields needed to create a bank account row.
 type NewBankAccount struct {
-	SessionID     string
-	AccountUID    string
-	BankName      string
-	BankCountry   string
-	ActualAccount string
-	StartSyncDate string
-	SessionExpiry string
-	IBAN          string
-	Currency      string
+	SessionID          string
+	AccountUID         string
+	BankName           string
+	BankCountry        string
+	ActualAccount      string
+	StartSyncDate      string
+	SessionExpiry      string
+	IBAN               string
+	Currency           string
+	IdentificationHash string
 
 	// OpeningBalanceState distinguishes a row created before opening balances
 	// existed (empty) from one created after (OpeningBalanceAuto). Only the
@@ -245,6 +251,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE bank_accounts ADD COLUMN last_sync_date TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE bank_accounts ADD COLUMN iban TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE bank_accounts ADD COLUMN currency TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE bank_accounts ADD COLUMN identification_hash TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE bank_accounts ADD COLUMN opening_balance_state TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE bank_accounts ADD COLUMN opening_balance_cents INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE bank_accounts ADD COLUMN opening_balance_date TEXT NOT NULL DEFAULT ''`,
@@ -514,7 +521,7 @@ func (s *Store) GetAllBankAccounts() ([]BankAccount, error) {
 	rows, err := s.db.Query(
 		`SELECT id, session_id, account_uid, bank_name, bank_country, actual_account, start_sync_date,
 		        COALESCE(last_sync_date, ''), session_expiry, created_at,
-		        COALESCE(iban, ''), COALESCE(currency, ''),
+		        COALESCE(iban, ''), COALESCE(currency, ''), COALESCE(identification_hash, ''),
 		        COALESCE(opening_balance_state, ''), COALESCE(opening_balance_cents, 0),
 		        COALESCE(opening_balance_date, ''), COALESCE(opening_balance_ref, ''),
 		        COALESCE(opening_balance_written_at, ''), COALESCE(balances_access, ''),
@@ -531,7 +538,7 @@ func (s *Store) GetAllBankAccounts() ([]BankAccount, error) {
 		err := rows.Scan(
 			&a.ID, &a.SessionID, &a.AccountUID, &a.BankName, &a.BankCountry,
 			&a.ActualAccount, &a.StartSyncDate, &a.LastSyncDate, &a.SessionExpiry,
-			&a.CreatedAt, &a.IBAN, &a.Currency,
+			&a.CreatedAt, &a.IBAN, &a.Currency, &a.IdentificationHash,
 			&a.OpeningBalanceState, &a.OpeningBalanceCents,
 			&a.OpeningBalanceDate, &a.OpeningBalanceRef,
 			&a.OpeningBalanceWrittenAt, &a.BalancesAccess,
@@ -554,15 +561,26 @@ func (s *Store) AddBankAccount(a NewBankAccount) (int64, error) {
 	res, err := s.db.Exec(
 		`INSERT INTO bank_accounts
 		   (session_id, account_uid, bank_name, bank_country, actual_account, start_sync_date, session_expiry,
-		    iban, currency, opening_balance_state)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    iban, currency, identification_hash, opening_balance_state)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.SessionID, a.AccountUID, a.BankName, a.BankCountry, a.ActualAccount, a.StartSyncDate, a.SessionExpiry,
-		normaliseIBAN(a.IBAN), strings.ToUpper(strings.TrimSpace(a.Currency)), a.OpeningBalanceState,
+		normaliseIBAN(a.IBAN), strings.ToUpper(strings.TrimSpace(a.Currency)),
+		strings.TrimSpace(a.IdentificationHash), a.OpeningBalanceState,
 	)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+// Renewal is what a newly authorised session says about an existing account.
+type Renewal struct {
+	SessionID          string
+	AccountUID         string
+	SessionExpiry      string
+	IBAN               string
+	Currency           string
+	IdentificationHash string
 }
 
 // RenewBankAccountSession points an existing account at a newly authorised
@@ -576,17 +594,22 @@ func (s *Store) AddBankAccount(a NewBankAccount) (int64, error) {
 // next sync asks for an account whose session is closed and gets 401
 // CLOSED_SESSION.
 //
-// The IBAN and currency are filled in when the new session supplies them and
-// the row lacks them, which is the state of any account connected before they
-// were recorded. An existing value is never blanked by a session that omits it.
-func (s *Store) RenewBankAccountSession(id int64, sessionID, accountUID, expiry, iban, currency string) error {
+// The IBAN, currency and identification hash are filled in when the new session
+// supplies them and the row lacks them, which is the state of any account
+// connected before they were recorded. An existing value is never blanked by a
+// session that omits it. They are normalised the same way AddBankAccount
+// normalises them, so a later renewal compares like with like.
+func (s *Store) RenewBankAccountSession(id int64, r Renewal) error {
 	res, err := s.db.Exec(`
 		UPDATE bank_accounts
 		SET session_id = ?, account_uid = ?, session_expiry = ?,
 		    iban = COALESCE(NULLIF(?, ''), iban),
-		    currency = COALESCE(NULLIF(?, ''), currency)
+		    currency = COALESCE(NULLIF(?, ''), currency),
+		    identification_hash = COALESCE(NULLIF(?, ''), identification_hash)
 		WHERE id = ?`,
-		sessionID, accountUID, expiry, iban, currency, id,
+		r.SessionID, r.AccountUID, r.SessionExpiry,
+		normaliseIBAN(r.IBAN), strings.ToUpper(strings.TrimSpace(r.Currency)),
+		strings.TrimSpace(r.IdentificationHash), id,
 	)
 	if err != nil {
 		return err

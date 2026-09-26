@@ -425,3 +425,36 @@ func TestStartAuth_balanceAccessCanBeOptedOut(t *testing.T) {
 		t.Error("opting out of balances must not disable transactions")
 	}
 }
+
+// TestSessionAccount_readsTheIdentificationHash covers the one identifier that
+// survives a new authorisation. The UID is issued per session, so a renewal
+// that has only the UID cannot tell the same account from a different one.
+func TestSessionAccount_readsTheIdentificationHash(t *testing.T) {
+	var a SessionAccount
+	if err := json.Unmarshal([]byte(`{"uid":"u-1","identification_hash":" h-1 "}`), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.IdentificationHash != "h-1" {
+		t.Errorf("IdentificationHash: got %q, want h-1", a.IdentificationHash)
+	}
+}
+
+// TestSessionAccount_keepsTheHashThroughTheSettings pins the path the picker
+// depends on. Offered accounts are marshalled into a setting on the callback
+// and decoded again when the picker renders; a field that does not survive that
+// round trip is lost exactly when the user has to choose, which is exactly when
+// a renewal needs it.
+func TestSessionAccount_keepsTheHashThroughTheSettings(t *testing.T) {
+	in := []SessionAccount{{UID: "u-1", IdentificationHash: "h-1"}}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out []SessionAccount
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(out) != 1 || out[0].IdentificationHash != "h-1" {
+		t.Errorf("round trip lost the hash: %+v", out)
+	}
+}

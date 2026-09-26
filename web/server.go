@@ -570,6 +570,18 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.finishAuth(w, r, sr)
+}
+
+// finishAuth routes a completed authorisation to where it belongs: straight onto
+// the account being renewed when that account can be identified among the ones
+// the bank returned, and otherwise to the picker.
+//
+// A renewal that cannot be matched goes to the picker in renewal mode rather
+// than as a new connection. Treated as new, it adds a second account for the
+// same bank account with an empty import history, and the original — still
+// holding a UID from the closed session — goes on failing every sync.
+func (s *Server) finishAuth(w http.ResponseWriter, r *http.Request, sr *enablebanking.SessionResponse) {
 	bankName, _ := s.st.GetSetting("pending_bank_name")
 	bankCountry, _ := s.st.GetSetting("pending_bank_country")
 	expiry, _ := s.st.GetSetting("pending_session_expiry")
@@ -584,21 +596,25 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	_ = s.st.SetSetting("pending_renew_account_id", "")
 	_ = s.st.SetSetting("pending_auth_url", "")
 
-	if renewAccountID != "" && len(sr.Accounts) == 1 {
+	if renewAccountID != "" {
 		id, err := strconv.ParseInt(renewAccountID, 10, 64)
-		if err == nil {
-			a := sr.Accounts[0]
-			err = s.st.RenewBankAccountSession(id, sr.SessionID, a.EffectiveUID(), expiry, a.IBAN, a.Currency)
-		}
-		if err != nil {
-			http.Redirect(w, r, "/connect?error="+urlEncode("Renewal failed: "+err.Error()), http.StatusFound)
+		existing, found := s.bankAccount(id)
+		if err != nil || !found {
+			http.Redirect(w, r, "/connect?error="+urlEncode("Renewal failed: the account being renewed no longer exists"), http.StatusFound)
 			return
 		}
-		http.Redirect(w, r, "/status", http.StatusFound)
-		return
+		if a, ok := matchRenewal(existing, sr.Accounts); ok {
+			if err := s.st.RenewBankAccountSession(id, renewalFrom(a, sr.SessionID, expiry)); err != nil {
+				http.Redirect(w, r, "/connect?error="+urlEncode("Renewal failed: "+err.Error()), http.StatusFound)
+				return
+			}
+			http.Redirect(w, r, "/status", http.StatusFound)
+			return
+		}
 	}
 
 	accountsJSON, _ := json.Marshal(sr.Accounts)
+	_ = s.st.SetSetting("pending_auth_renew_account_id", renewAccountID)
 	_ = s.st.SetSetting("pending_auth_session_id", sr.SessionID)
 	_ = s.st.SetSetting("pending_auth_accounts", string(accountsJSON))
 	_ = s.st.SetSetting("pending_auth_expiry", expiry)
@@ -660,13 +676,93 @@ func (s *Server) knownBudgetAccounts() []string {
 	return out
 }
 
-func accountDetails(accounts []enablebanking.SessionAccount, uid string) (string, string) {
+// findAccount returns the offered account with the given UID.
+func findAccount(accounts []enablebanking.SessionAccount, uid string) (enablebanking.SessionAccount, bool) {
 	for _, a := range accounts {
 		if a.EffectiveUID() == uid {
-			return a.IBAN, a.Currency
+			return a, true
 		}
 	}
-	return "", ""
+	return enablebanking.SessionAccount{}, false
+}
+
+// matchRenewal finds, among the accounts a newly authorised session offers, the
+// one that is the existing account being renewed.
+//
+// It decides on the strongest identifier both sides actually carry, and a
+// weaker one never overrules a stronger. If the bank supplies identification
+// hashes and none equals the account's, that is a different account whatever
+// the IBAN says. The IBAN is compared together with the currency where both are
+// known, because several currency accounts at one bank can share an IBAN. Where
+// neither side carries an identifier — an account connected before they were
+// recorded — a session offering exactly one account is taken to be it, which is
+// all renewal ever did.
+//
+// It reports false rather than guess when the evidence names no account or more
+// than one; the caller then asks which one it is.
+func matchRenewal(existing store.BankAccount, offered []enablebanking.SessionAccount) (enablebanking.SessionAccount, bool) {
+	if existing.IdentificationHash != "" && offersAny(offered, func(a enablebanking.SessionAccount) string { return a.IdentificationHash }) {
+		return only(offered, func(a enablebanking.SessionAccount) bool {
+			return a.IdentificationHash == existing.IdentificationHash
+		})
+	}
+	if existing.IBAN != "" && offersAny(offered, func(a enablebanking.SessionAccount) string { return a.IBAN }) {
+		return only(offered, func(a enablebanking.SessionAccount) bool {
+			return a.IBAN == existing.IBAN &&
+				(existing.Currency == "" || a.Currency == "" || strings.EqualFold(a.Currency, existing.Currency))
+		})
+	}
+	if len(offered) == 1 {
+		return offered[0], true
+	}
+	return enablebanking.SessionAccount{}, false
+}
+
+func offersAny(offered []enablebanking.SessionAccount, field func(enablebanking.SessionAccount) string) bool {
+	for _, a := range offered {
+		if field(a) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func only(offered []enablebanking.SessionAccount, match func(enablebanking.SessionAccount) bool) (enablebanking.SessionAccount, bool) {
+	var found enablebanking.SessionAccount
+	n := 0
+	for _, a := range offered {
+		if match(a) {
+			found, n = a, n+1
+		}
+	}
+	return found, n == 1
+}
+
+// renewalFrom is what the chosen account of a new session writes onto the
+// account it renews.
+func renewalFrom(a enablebanking.SessionAccount, sessionID, expiry string) store.Renewal {
+	return store.Renewal{
+		SessionID:          sessionID,
+		AccountUID:         a.EffectiveUID(),
+		SessionExpiry:      expiry,
+		IBAN:               a.IBAN,
+		Currency:           a.Currency,
+		IdentificationHash: a.IdentificationHash,
+	}
+}
+
+// bankAccount looks up one account by id.
+func (s *Server) bankAccount(id int64) (store.BankAccount, bool) {
+	accounts, err := s.st.GetAllBankAccounts()
+	if err != nil {
+		return store.BankAccount{}, false
+	}
+	for _, a := range accounts {
+		if a.ID == id {
+			return a, true
+		}
+	}
+	return store.BankAccount{}, false
 }
 
 func (s *Server) handlePickAccount(w http.ResponseWriter, r *http.Request) {
@@ -682,7 +778,22 @@ func (s *Server) handlePickAccount(w http.ResponseWriter, r *http.Request) {
 		BackendLabel     string
 		KnownAccounts    []string
 		RenameSafe       bool
+		Renewing         bool
+		RenewingName     string
 		Error            string
+	}
+
+	var renewing store.BankAccount
+	renewingID, _ := s.st.GetSetting("pending_auth_renew_account_id")
+	isRenewal := false
+	if renewingID != "" {
+		if id, err := strconv.ParseInt(renewingID, 10, 64); err == nil {
+			renewing, isRenewal = s.bankAccount(id)
+		}
+	}
+	renewingName := renewing.ActualAccount
+	if renewingName == "" {
+		renewingName = renewing.BankName
 	}
 
 	sessionID, _ := s.st.GetSetting("pending_auth_session_id")
@@ -718,6 +829,8 @@ func (s *Server) handlePickAccount(w http.ResponseWriter, r *http.Request) {
 			BackendLabel:     s.BackendLabel(),
 			KnownAccounts:    s.knownBudgetAccounts(),
 			RenameSafe:       s.renameSafeBackend(),
+			Renewing:         isRenewal,
+			RenewingName:     renewingName,
 		})
 		return
 	}
@@ -734,8 +847,25 @@ func (s *Server) handlePickAccount(w http.ResponseWriter, r *http.Request) {
 			BackendLabel:     s.BackendLabel(),
 			KnownAccounts:    s.knownBudgetAccounts(),
 			RenameSafe:       s.renameSafeBackend(),
+			Renewing:         isRenewal,
+			RenewingName:     renewingName,
 			Error:            "Please select an account.",
 		})
+		return
+	}
+	chosen, offered := findAccount(accounts, uid)
+	if !offered {
+		http.Error(w, "The selected account is not one this bank returned; start the connection again.", http.StatusBadRequest)
+		return
+	}
+
+	if isRenewal {
+		if err := s.st.RenewBankAccountSession(renewing.ID, renewalFrom(chosen, sessionID, expiry)); err != nil {
+			http.Error(w, "Failed to renew: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		s.clearPendingAuth()
+		http.Redirect(w, r, "/status", http.StatusFound)
 		return
 	}
 	if actualAccount == "" {
@@ -751,30 +881,35 @@ func (s *Server) handlePickAccount(w http.ResponseWriter, r *http.Request) {
 		startDate = defaultStart
 	}
 
-	iban, currency := accountDetails(accounts, uid)
-
 	if _, err := s.st.AddBankAccount(store.NewBankAccount{
-		SessionID:     sessionID,
-		AccountUID:    uid,
-		BankName:      bankName,
-		BankCountry:   bankCountry,
-		ActualAccount: actualAccount,
-		StartSyncDate: startDate,
-		SessionExpiry: expiry,
-		IBAN:          iban,
-		Currency:      currency,
+		SessionID:          sessionID,
+		AccountUID:         uid,
+		BankName:           bankName,
+		BankCountry:        bankCountry,
+		ActualAccount:      actualAccount,
+		StartSyncDate:      startDate,
+		SessionExpiry:      expiry,
+		IBAN:               chosen.IBAN,
+		Currency:           chosen.Currency,
+		IdentificationHash: chosen.IdentificationHash,
 	}); err != nil {
 		http.Error(w, "Failed to save: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	_ = s.st.SetSetting("pending_auth_session_id", "")
-	_ = s.st.SetSetting("pending_auth_accounts", "")
-	_ = s.st.SetSetting("pending_auth_expiry", "")
-	_ = s.st.SetSetting("pending_auth_bank_name", "")
-	_ = s.st.SetSetting("pending_auth_bank_country", "")
-
+	s.clearPendingAuth()
 	http.Redirect(w, r, "/status", http.StatusFound)
+}
+
+// clearPendingAuth forgets a completed authorisation, including the renewal it
+// may have been part of.
+func (s *Server) clearPendingAuth() {
+	for _, key := range []string{
+		"pending_auth_session_id", "pending_auth_accounts", "pending_auth_expiry",
+		"pending_auth_bank_name", "pending_auth_bank_country", "pending_auth_renew_account_id",
+	} {
+		_ = s.st.SetSetting(key, "")
+	}
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {

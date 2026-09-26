@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1242,19 +1243,19 @@ func TestHandlePickAccount_POST_missingIBANIsNotFatal(t *testing.T) {
 	}
 }
 
-func TestAccountDetails_matchesViaEffectiveUID(t *testing.T) {
+func TestFindAccount_matchesViaEffectiveUID(t *testing.T) {
 	accounts := []enablebanking.SessionAccount{
 		{AccountUID: "acct-uid", IBAN: "DE20333333333333333333", Currency: "EUR"},
 		{ResourceID: "res-id", IBAN: "DE47444444444444444444", Currency: "USD"},
 	}
-	if iban, cur := accountDetails(accounts, "acct-uid"); iban != "DE20333333333333333333" || cur != "EUR" {
-		t.Errorf("account_uid fallback: got %q / %q", iban, cur)
+	if a, ok := findAccount(accounts, "acct-uid"); !ok || a.IBAN != "DE20333333333333333333" || a.Currency != "EUR" {
+		t.Errorf("account_uid fallback: got %+v, %v", a, ok)
 	}
-	if iban, cur := accountDetails(accounts, "res-id"); iban != "DE47444444444444444444" || cur != "USD" {
-		t.Errorf("resource_id fallback: got %q / %q", iban, cur)
+	if a, ok := findAccount(accounts, "res-id"); !ok || a.IBAN != "DE47444444444444444444" || a.Currency != "USD" {
+		t.Errorf("resource_id fallback: got %+v, %v", a, ok)
 	}
-	if iban, cur := accountDetails(accounts, "unknown"); iban != "" || cur != "" {
-		t.Errorf("unknown uid must yield empty, got %q / %q", iban, cur)
+	if _, ok := findAccount(accounts, "unknown"); ok {
+		t.Error("an unknown uid was reported as offered")
 	}
 }
 
@@ -2477,5 +2478,250 @@ func TestReview_countsWhatDidNotGoThrough(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Errorf("unexpected series: %v", got)
+	}
+}
+
+// TestMatchRenewal_decidesOnTheStrongestIdentifierBothSidesCarry is the rule a
+// renewal lives or dies by.
+//
+// Enable Banking issues account UIDs per session, so a renewal has to find the
+// existing account among the ones the new session offers by something else.
+// Each case is one clause of matchRenewal's contract; the ones that report false
+// are the ones where a wrong guess would renew the wrong account, which is
+// worse than asking.
+func TestMatchRenewal_decidesOnTheStrongestIdentifierBothSidesCarry(t *testing.T) {
+	eur := enablebanking.SessionAccount{UID: "new-eur", IBAN: "LT00SHARED", Currency: "EUR", IdentificationHash: "h-eur"}
+	usd := enablebanking.SessionAccount{UID: "new-usd", IBAN: "LT00SHARED", Currency: "USD", IdentificationHash: "h-usd"}
+	other := enablebanking.SessionAccount{UID: "new-other", IBAN: "LT00OTHER", Currency: "EUR", IdentificationHash: "h-other"}
+
+	cases := []struct {
+		name     string
+		existing store.BankAccount
+		offered  []enablebanking.SessionAccount
+		want     string
+	}{{
+		name:     "the hash picks the account among several",
+		existing: store.BankAccount{IdentificationHash: "h-usd"},
+		offered:  []enablebanking.SessionAccount{eur, usd, other},
+		want:     "new-usd",
+	}, {
+		name:     "a hash that matches nothing is a different account, whatever the IBAN says",
+		existing: store.BankAccount{IdentificationHash: "h-gone", IBAN: "LT00OTHER", Currency: "EUR"},
+		offered:  []enablebanking.SessionAccount{eur, other},
+		want:     "",
+	}, {
+		name:     "a bank that sends no hashes falls through to the IBAN",
+		existing: store.BankAccount{IdentificationHash: "h-old", IBAN: "LT00OTHER", Currency: "EUR"},
+		offered: []enablebanking.SessionAccount{
+			{UID: "new-a", IBAN: "LT00SHARED", Currency: "EUR"},
+			{UID: "new-b", IBAN: "LT00OTHER", Currency: "EUR"},
+		},
+		want: "new-b",
+	}, {
+		name:     "the currency separates accounts that share an IBAN",
+		existing: store.BankAccount{IBAN: "LT00SHARED", Currency: "USD"},
+		offered: []enablebanking.SessionAccount{
+			{UID: "new-eur", IBAN: "LT00SHARED", Currency: "EUR"},
+			{UID: "new-usd", IBAN: "LT00SHARED", Currency: "usd"},
+		},
+		want: "new-usd",
+	}, {
+		name:     "a shared IBAN with no currency to separate it is not guessed",
+		existing: store.BankAccount{IBAN: "LT00SHARED"},
+		offered: []enablebanking.SessionAccount{
+			{UID: "new-eur", IBAN: "LT00SHARED", Currency: "EUR"},
+			{UID: "new-usd", IBAN: "LT00SHARED", Currency: "USD"},
+		},
+		want: "",
+	}, {
+		name:     "an account connected before any identifier was recorded, and one offered",
+		existing: store.BankAccount{},
+		offered:  []enablebanking.SessionAccount{eur},
+		want:     "new-eur",
+	}, {
+		name:     "an account connected before any identifier was recorded, and several offered",
+		existing: store.BankAccount{},
+		offered:  []enablebanking.SessionAccount{eur, usd},
+		want:     "",
+	}, {
+		name:     "two offered accounts carrying the same hash are not guessed between",
+		existing: store.BankAccount{IdentificationHash: "h-eur"},
+		offered:  []enablebanking.SessionAccount{eur, {UID: "new-twin", IdentificationHash: "h-eur"}},
+		want:     "",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := matchRenewal(tc.existing, tc.offered)
+			switch {
+			case tc.want == "" && ok:
+				t.Errorf("matched %q; the evidence does not identify one account", got.EffectiveUID())
+			case tc.want != "" && !ok:
+				t.Errorf("no match; want %q", tc.want)
+			case tc.want != "" && got.EffectiveUID() != tc.want:
+				t.Errorf("matched %q, want %q", got.EffectiveUID(), tc.want)
+			}
+		})
+	}
+}
+
+// finish runs the part of the OAuth callback that follows the bank's answer.
+func finish(t *testing.T, srv *Server, sr *enablebanking.SessionResponse) *httptest.ResponseRecorder {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, "/callback", nil)
+	w := httptest.NewRecorder()
+	srv.finishAuth(w, req, sr)
+	return w
+}
+
+// seedRenewal stores an account and marks it as the one being renewed, the way
+// /renew does before sending the user to the bank.
+func seedRenewal(t *testing.T, st *store.Store, a store.NewBankAccount) int64 {
+	t.Helper()
+	id, err := st.AddBankAccount(a)
+	if err != nil {
+		t.Fatalf("AddBankAccount: %v", err)
+	}
+	_ = st.SetSetting("pending_renew_account_id", strconv.FormatInt(id, 10))
+	_ = st.SetSetting("pending_bank_name", a.BankName)
+	_ = st.SetSetting("pending_session_expiry", "2027-03-25T00:00:00Z")
+	return id
+}
+
+// TestFinishAuth_renewsTheAccountTheHashIdentifies is a renewal against a bank
+// that offers several accounts. The hash names one of them, so the existing row
+// is renewed in place: same id, same budget account, same start date — which is
+// what keeps its import history attached — and no second row.
+func TestFinishAuth_renewsTheAccountTheHashIdentifies(t *testing.T) {
+	srv, st := newTestServer(t)
+	id := seedRenewal(t, st, store.NewBankAccount{
+		SessionID: "old-sess", AccountUID: "old-uid", BankName: "Revolut", BankCountry: "LT",
+		ActualAccount: "Revolut USD", StartSyncDate: "2026-01-01", SessionExpiry: "2026-09-20T00:00:00Z",
+		IdentificationHash: "h-usd",
+	})
+
+	w := finish(t, srv, &enablebanking.SessionResponse{SessionID: "new-sess", Accounts: []enablebanking.SessionAccount{
+		{UID: "new-eur", IdentificationHash: "h-eur", Currency: "EUR"},
+		{UID: "new-usd", IdentificationHash: "h-usd", Currency: "USD"},
+	}})
+
+	if loc := w.Header().Get("Location"); loc != "/status" {
+		t.Fatalf("redirected to %q, want /status", loc)
+	}
+	accounts, _ := st.GetAllBankAccounts()
+	if len(accounts) != 1 {
+		t.Fatalf("%d accounts after renewal, want 1", len(accounts))
+	}
+	a := accounts[0]
+	if a.ID != id || a.AccountUID != "new-usd" || a.SessionID != "new-sess" {
+		t.Errorf("renewed row: id %d uid %q session %q", a.ID, a.AccountUID, a.SessionID)
+	}
+	if a.ActualAccount != "Revolut USD" || a.StartSyncDate != "2026-01-01" {
+		t.Errorf("renewal disturbed the account's own settings: %q from %q", a.ActualAccount, a.StartSyncDate)
+	}
+}
+
+// TestFinishAuth_asksWhichAccountWhenItCannotTell is the case that used to add
+// a duplicate. An account connected before any identifier was recorded, renewed
+// against a bank that now offers two, cannot be matched — so the user is asked,
+// and the picker knows it is renewing rather than connecting.
+func TestFinishAuth_asksWhichAccountWhenItCannotTell(t *testing.T) {
+	srv, st := newTestServer(t)
+	id := seedRenewal(t, st, store.NewBankAccount{
+		SessionID: "old-sess", AccountUID: "old-uid", BankName: "Revolut", BankCountry: "LT",
+		ActualAccount: "Revolut", StartSyncDate: "2026-01-01", SessionExpiry: "2026-09-20T00:00:00Z",
+	})
+
+	w := finish(t, srv, &enablebanking.SessionResponse{SessionID: "new-sess", Accounts: []enablebanking.SessionAccount{
+		{UID: "new-eur", IBAN: "LT00SHARED", Currency: "EUR", IdentificationHash: "h-eur"},
+		{UID: "new-usd", IBAN: "LT00SHARED", Currency: "USD", IdentificationHash: "h-usd"},
+	}})
+	if loc := w.Header().Get("Location"); loc != "/pick-account" {
+		t.Fatalf("redirected to %q, want /pick-account", loc)
+	}
+
+	page := get(t, srv, "/pick-account")
+	if !strings.Contains(page.Body.String(), "Renew this account") {
+		t.Error("the picker does not say it is renewing; the user would take it for a new connection")
+	}
+	if strings.Contains(page.Body.String(), `name="start_sync_date"`) {
+		t.Error("the picker offers a start date, which a renewal ignores")
+	}
+
+	w = post(t, srv, "/pick-account", url.Values{"account_uid": {"new-eur"}})
+	if w.Code != http.StatusFound {
+		t.Fatalf("POST /pick-account: %d %s", w.Code, w.Body.String())
+	}
+	accounts, _ := st.GetAllBankAccounts()
+	if len(accounts) != 1 {
+		t.Fatalf("%d accounts after choosing, want the renewed one only", len(accounts))
+	}
+	a := accounts[0]
+	if a.ID != id || a.AccountUID != "new-eur" || a.SessionID != "new-sess" || a.IdentificationHash != "h-eur" {
+		t.Errorf("renewed row: id %d uid %q session %q hash %q", a.ID, a.AccountUID, a.SessionID, a.IdentificationHash)
+	}
+	if v, _ := st.GetSetting("pending_auth_renew_account_id"); v != "" {
+		t.Errorf("the renewal was left pending as %q after completing", v)
+	}
+}
+
+// TestFinishAuth_anAbandonedRenewalDoesNotCaptureTheNextConnection guards the
+// state the picker keys on. A renewal that reached the picker and was never
+// finished leaves its account id behind; a later, unrelated connection must not
+// find it and overwrite that account instead of adding its own.
+func TestFinishAuth_anAbandonedRenewalDoesNotCaptureTheNextConnection(t *testing.T) {
+	srv, st := newTestServer(t)
+	stale, _ := st.AddBankAccount(store.NewBankAccount{
+		SessionID: "old-sess", AccountUID: "old-uid", BankName: "Revolut", BankCountry: "LT",
+		SessionExpiry: "2026-09-20T00:00:00Z",
+	})
+	_ = st.SetSetting("pending_auth_renew_account_id", strconv.FormatInt(stale, 10))
+	_ = st.SetSetting("pending_bank_name", "Other Bank")
+
+	finish(t, srv, &enablebanking.SessionResponse{SessionID: "other-sess", Accounts: []enablebanking.SessionAccount{
+		{UID: "other-uid", IBAN: "DE00OTHER", Currency: "EUR"},
+	}})
+	post(t, srv, "/pick-account", url.Values{"account_uid": {"other-uid"}, "actual_account": {"Other"}})
+
+	accounts, _ := st.GetAllBankAccounts()
+	if len(accounts) != 2 {
+		t.Fatalf("%d accounts, want the stale one untouched and the new one added", len(accounts))
+	}
+	if accounts[0].AccountUID != "old-uid" {
+		t.Errorf("the abandoned renewal's account was overwritten with %q", accounts[0].AccountUID)
+	}
+}
+
+// TestFinishAuth_refusesToRenewAnAccountThatIsGone keeps a renewal whose account
+// was removed in the meantime from turning silently into a new connection.
+func TestFinishAuth_refusesToRenewAnAccountThatIsGone(t *testing.T) {
+	srv, st := newTestServer(t)
+	_ = st.SetSetting("pending_renew_account_id", "999")
+
+	w := finish(t, srv, &enablebanking.SessionResponse{SessionID: "new-sess", Accounts: []enablebanking.SessionAccount{
+		{UID: "new-uid"},
+	}})
+	if loc := w.Header().Get("Location"); !strings.HasPrefix(loc, "/connect?error=") {
+		t.Errorf("redirected to %q, want an error on /connect", loc)
+	}
+	if accounts, _ := st.GetAllBankAccounts(); len(accounts) != 0 {
+		t.Errorf("%d accounts created for a renewal of nothing", len(accounts))
+	}
+}
+
+// TestPickAccount_refusesAnAccountTheBankDidNotOffer covers a stale or edited
+// form. The chosen UID is looked up among the accounts this authorisation
+// returned; without the check an unknown one would be written as an empty UID.
+func TestPickAccount_refusesAnAccountTheBankDidNotOffer(t *testing.T) {
+	srv, st := newTestServer(t)
+	_ = st.SetSetting("pending_auth_session_id", "sess")
+	_ = st.SetSetting("pending_auth_accounts", `[{"uid":"offered"}]`)
+
+	w := post(t, srv, "/pick-account", url.Values{"account_uid": {"not-offered"}})
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("got %d, want 400", w.Code)
+	}
+	if accounts, _ := st.GetAllBankAccounts(); len(accounts) != 0 {
+		t.Errorf("%d accounts written for an account the bank never offered", len(accounts))
 	}
 }

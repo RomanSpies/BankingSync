@@ -60,6 +60,14 @@ type SessionAccount struct {
 	Name            string `json:"name"`
 	Product         string `json:"product"`
 	CashAccountType string `json:"cash_account_type"`
+
+	// IdentificationHash is Enable Banking's stable identifier for the account
+	// across sessions. The UID above is issued per session and is valid only
+	// while that session is authorised, so it cannot tell a renewed account
+	// from a different one; this is what Enable Banking provides for exactly
+	// that, "for matching accounts between multiple sessions". Empty when the
+	// provider does not supply one.
+	IdentificationHash string `json:"identification_hash"`
 }
 
 // UnmarshalJSON reads an account entry without assuming a single wire layout.
@@ -92,6 +100,7 @@ func (a *SessionAccount) UnmarshalJSON(data []byte) error {
 		jsonString(raw, "psu_name"),
 	)
 	a.IBAN = normaliseIBAN(firstNonEmpty(jsonString(raw, "iban"), nestedIBAN(raw)))
+	a.IdentificationHash = jsonString(raw, "identification_hash")
 	return nil
 }
 

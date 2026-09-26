@@ -187,7 +187,10 @@ func TestRenewBankAccountSession_movesTheAccountUIDWithTheSession(t *testing.T) 
 		SessionExpiry: "2026-09-20T00:00:00Z",
 	})
 
-	if err := st.RenewBankAccountSession(id, "new-sess", "new-uid", "2027-03-25T09:58:41Z", "DE00TEST", "EUR"); err != nil {
+	if err := st.RenewBankAccountSession(id, store.Renewal{
+		SessionID: "new-sess", AccountUID: "new-uid", SessionExpiry: "2027-03-25T09:58:41Z",
+		IBAN: "de00 test", Currency: "eur", IdentificationHash: "hash-1",
+	}); err != nil {
 		t.Fatalf("RenewBankAccountSession: %v", err)
 	}
 
@@ -206,7 +209,12 @@ func TestRenewBankAccountSession_movesTheAccountUIDWithTheSession(t *testing.T) 
 		t.Errorf("session: got %q until %q", a.SessionID, a.SessionExpiry)
 	}
 	if a.IBAN != "DE00TEST" || a.Currency != "EUR" {
-		t.Errorf("an account connected without an IBAN and currency was not given them: %q %q", a.IBAN, a.Currency)
+		t.Errorf("an account connected without an IBAN and currency was not given them, normalised: %q %q",
+			a.IBAN, a.Currency)
+	}
+	if a.IdentificationHash != "hash-1" {
+		t.Errorf("IdentificationHash: got %q, want hash-1 — without it the next renewal cannot match by hash",
+			a.IdentificationHash)
 	}
 }
 
@@ -218,9 +226,10 @@ func TestRenewBankAccountSession_keepsWhatTheNewSessionOmits(t *testing.T) {
 	id, _ := st.AddBankAccount(store.NewBankAccount{
 		SessionID: "old-sess", AccountUID: "old-uid", BankName: "Bank", BankCountry: "DE",
 		SessionExpiry: "2026-09-20T00:00:00Z", IBAN: "DE00KEEP", Currency: "EUR",
+		IdentificationHash: "hash-keep",
 	})
 
-	if err := st.RenewBankAccountSession(id, "new-sess", "new-uid", "2027-03-25T00:00:00Z", "", ""); err != nil {
+	if err := st.RenewBankAccountSession(id, store.Renewal{SessionID: "new-sess", AccountUID: "new-uid", SessionExpiry: "2027-03-25T00:00:00Z"}); err != nil {
 		t.Fatalf("RenewBankAccountSession: %v", err)
 	}
 
@@ -229,6 +238,10 @@ func TestRenewBankAccountSession_keepsWhatTheNewSessionOmits(t *testing.T) {
 		t.Errorf("a renewal that omitted the IBAN and currency blanked them: %q %q",
 			accounts[0].IBAN, accounts[0].Currency)
 	}
+	if accounts[0].IdentificationHash != "hash-keep" {
+		t.Errorf("a renewal that omitted the identification hash blanked it: %q",
+			accounts[0].IdentificationHash)
+	}
 }
 
 // TestRenewBankAccountSession_refusesAnUnknownAccount keeps a renewal against
@@ -236,7 +249,7 @@ func TestRenewBankAccountSession_keepsWhatTheNewSessionOmits(t *testing.T) {
 // error and redirect to the status page regardless.
 func TestRenewBankAccountSession_refusesAnUnknownAccount(t *testing.T) {
 	st := openTestStore(t)
-	if err := st.RenewBankAccountSession(999, "new-sess", "new-uid", "2027-03-25T00:00:00Z", "", ""); err == nil {
+	if err := st.RenewBankAccountSession(999, store.Renewal{SessionID: "new-sess", AccountUID: "new-uid", SessionExpiry: "2027-03-25T00:00:00Z"}); err == nil {
 		t.Error("renewing an account that does not exist reported success")
 	}
 }
