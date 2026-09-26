@@ -1848,3 +1848,68 @@ func TestLevelObservations_migratesAnExistingSample(t *testing.T) {
 		t.Errorf("the upsert did not find the renamed column: %+v", after)
 	}
 }
+
+// TestMarkSessionEnded_keepsTheFirstReport records when the session ended, not
+// when it was last noticed. Every sync until the renewal reports it again.
+func TestMarkSessionEnded_keepsTheFirstReport(t *testing.T) {
+	st := openTestStore(t)
+	id, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s", AccountUID: "u", BankName: "B", BankCountry: "DE", SessionExpiry: "2099-01-01T00:00:00Z"})
+
+	if err := st.MarkSessionEnded(id, "CLOSED_SESSION"); err != nil {
+		t.Fatalf("MarkSessionEnded: %v", err)
+	}
+	first, _ := st.GetAllBankAccounts()
+	if first[0].SessionEndedAt == "" || first[0].SessionEndedReason != "CLOSED_SESSION" {
+		t.Fatalf("not marked: %+v", first[0])
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+	_ = st.MarkSessionEnded(id, "CLOSED_SESSION")
+	again, _ := st.GetAllBankAccounts()
+	if again[0].SessionEndedAt != first[0].SessionEndedAt {
+		t.Errorf("the ended time moved from %q to %q on a repeated report",
+			first[0].SessionEndedAt, again[0].SessionEndedAt)
+	}
+}
+
+// TestRenewBankAccountSession_forgetsWhatTheOldConsentSaid covers the state a
+// closed session used to leave behind. A renewal is a new consent: the ended
+// mark goes, the balances scope is probed afresh, and a denied opening balance
+// returns to unset. Not to auto — auto lets the next sync write an opening
+// balance unattended, and an account connected before opening balances existed
+// must never gain a transaction nobody asked for. A balance already written is
+// left exactly as it is.
+func TestRenewBankAccountSession_forgetsWhatTheOldConsentSaid(t *testing.T) {
+	st := openTestStore(t)
+	denied, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s1", AccountUID: "u1", BankName: "B", BankCountry: "DE", SessionExpiry: "2099-01-01T00:00:00Z"})
+	written, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s2", AccountUID: "u2", BankName: "B", BankCountry: "DE", SessionExpiry: "2099-01-01T00:00:00Z"})
+	_ = st.MarkSessionEnded(denied, "CLOSED_SESSION")
+	_ = st.SetBalancesAccess(denied, "denied")
+	_ = st.SetOpeningBalanceState(denied, store.OpeningBalanceDenied)
+	_ = st.SetOpeningBalanceState(written, store.OpeningBalanceWritten)
+
+	for _, id := range []int64{denied, written} {
+		if err := st.RenewBankAccountSession(id, store.Renewal{SessionID: "new", AccountUID: "new-uid", SessionExpiry: "2099-06-01T00:00:00Z"}); err != nil {
+			t.Fatalf("RenewBankAccountSession: %v", err)
+		}
+	}
+
+	byID := map[int64]store.BankAccount{}
+	accounts, _ := st.GetAllBankAccounts()
+	for _, a := range accounts {
+		byID[a.ID] = a
+	}
+	d := byID[denied]
+	if d.SessionEndedAt != "" || d.SessionEndedReason != "" {
+		t.Errorf("the ended mark survived the renewal: %q %q", d.SessionEndedAt, d.SessionEndedReason)
+	}
+	if d.BalancesAccess != "" {
+		t.Errorf("BalancesAccess: got %q, want it probed afresh", d.BalancesAccess)
+	}
+	if d.OpeningBalanceState != "" {
+		t.Errorf("OpeningBalanceState: got %q, want unset — auto would write into the budget unattended", d.OpeningBalanceState)
+	}
+	if w := byID[written]; w.OpeningBalanceState != store.OpeningBalanceWritten {
+		t.Errorf("a written opening balance was disturbed by the renewal: %q", w.OpeningBalanceState)
+	}
+}

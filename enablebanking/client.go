@@ -187,7 +187,7 @@ func (c *Client) fetchPage(ctx context.Context, url string, headers map[string]s
 		return nil, "", err
 	}
 	if status != http.StatusOK {
-		err := fmt.Errorf("unexpected HTTP %d from Enable Banking: %s", status, body)
+		err := parseAPIError(status, body)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, "", err

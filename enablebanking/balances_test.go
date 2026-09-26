@@ -346,3 +346,39 @@ func TestFetchBalances_skipsMalformedEntries(t *testing.T) {
 		t.Fatalf("got %#v, want just the CLBD entry", got)
 	}
 }
+
+// TestFetchBalances_anEndedSessionIsNotARefusedScope separates the two things a
+// 401 can mean on this endpoint. A refused balances scope is permanent until
+// the next authorisation and is recorded as such; an ended session is a reason
+// to authorise again. Reading the second as the first marked the account's
+// balances denied for good, on the first sync after its session closed.
+func TestFetchBalances_anEndedSessionIsNotARefusedScope(t *testing.T) {
+	c := balanceServer(t, http.StatusUnauthorized, `{"code":401,"message":"Session is closed","error":"CLOSED_SESSION"}`)
+	_, err := c.FetchBalances(context.Background(), "acct-1")
+	if !errors.Is(err, ErrSessionEnded) {
+		t.Errorf("got %v, want ErrSessionEnded", err)
+	}
+	if errors.Is(err, ErrBalancesNotPermitted) {
+		t.Error("a closed session was classified as a refused balances scope")
+	}
+}
+
+// TestFetchTransactions_reportsAnEndedSession is the same answer on the
+// endpoint that matters most: the one the account cannot sync without.
+func TestFetchTransactions_reportsAnEndedSession(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/accounts/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"code":401,"message":"Session is closed","error":"CLOSED_SESSION"}`))
+	})
+	c := newTestClientWith(t, mux)
+
+	_, _, err := c.FetchTransactions(context.Background(), "acct-1", time.Now().AddDate(0, 0, -3))
+	if !errors.Is(err, ErrSessionEnded) {
+		t.Errorf("got %v, want ErrSessionEnded", err)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "CLOSED_SESSION" {
+		t.Errorf("the code did not survive: %v", err)
+	}
+}

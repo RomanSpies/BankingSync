@@ -246,6 +246,23 @@ type ebMock struct {
 	// onBalanceCall lets a test move the balance between the two readings a run
 	// makes, which is the only way to exercise the stability gate.
 	onBalanceCall func(call int) []map[string]any
+
+	// endedWith makes every account request fail the way an ended session does,
+	// carrying this error code. requests counts account requests of any kind.
+	endedWith string
+	requests  int
+}
+
+func (m *ebMock) endSession(code string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.endedWith = code
+}
+
+func (m *ebMock) accountRequests() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.requests
 }
 
 func (m *ebMock) setBalances(balances []map[string]any) {
@@ -341,6 +358,19 @@ func newHarness(t *testing.T) *harness {
 	mock := &ebMock{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/accounts/", func(w http.ResponseWriter, r *http.Request) {
+		mock.mu.Lock()
+		mock.requests++
+		ended := mock.endedWith
+		mock.mu.Unlock()
+		if ended != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"code": 401, "message": "Session is closed", "error": ended, "detail": nil,
+			})
+			return
+		}
+
 		if strings.HasSuffix(r.URL.Path, "/balances") {
 			mock.mu.Lock()
 			mock.balanceCalls++
@@ -7574,4 +7604,84 @@ func keysOf(m map[string]float64) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TestSync_anEndedSessionIsMarkedNotMistakenForARefusedScope is the incident.
+//
+// A session the bank has closed answers every request with 401 and the code
+// CLOSED_SESSION. The balances request goes first, and a 401 there used to be
+// read as a refused balances scope: the account was marked denied permanently,
+// the transaction fetch failed on the same 401, and the status page went on
+// reporting the account authorised because its expiry date was still ahead.
+//
+// Now the account is marked as needing renewal, the balances state is left as it
+// was, and later runs stop asking a bank that will only refuse again.
+func TestSync_anEndedSessionIsMarkedNotMistakenForARefusedScope(t *testing.T) {
+	h := newHarness(t)
+	h.addAccount(t, "")
+	_ = h.st.SetLastSyncDate(daysAgo(3))
+	h.reloadState(t)
+	h.eb.endSession("CLOSED_SESSION")
+
+	h.syncer.run()
+
+	if n := h.eb.accountRequests(); n != 1 {
+		t.Errorf("%d requests on the run that found the session closed, want 1 — the balances "+
+			"answer already says the session is over, and asking for transactions after it only "+
+			"repeats the refusal", n)
+	}
+	accounts, _ := h.st.GetAllBankAccounts()
+	a := accounts[0]
+	if a.SessionEndedAt == "" || a.SessionEndedReason != "CLOSED_SESSION" {
+		t.Errorf("the ended session was not recorded: at %q reason %q", a.SessionEndedAt, a.SessionEndedReason)
+	}
+	if a.BalancesAccess == "denied" || a.OpeningBalanceState == store.OpeningBalanceDenied {
+		t.Errorf("a closed session was taken for a refused balances scope: access %q, opening %q",
+			a.BalancesAccess, a.OpeningBalanceState)
+	}
+	if msg := h.lastSyncLog(t).Message; !strings.Contains(msg, "session has ended") || !strings.Contains(msg, "renew") {
+		t.Errorf("the sync log does not say what to do: %q", msg)
+	}
+
+	before := h.eb.accountRequests()
+	h.syncer.run()
+	if after := h.eb.accountRequests(); after != before {
+		t.Errorf("a marked account was fetched again: %d requests on a session known to be closed", after-before)
+	}
+	if msg := h.lastSyncLog(t).Message; !strings.Contains(msg, "session has ended") {
+		t.Errorf("the second run stopped saying why the account is not syncing: %q", msg)
+	}
+}
+
+// TestSync_aRenewalLiftsTheEndedMark closes the loop: the mark exists to be
+// cleared by the renewal it asks for, after which the account is fetched again.
+func TestSync_aRenewalLiftsTheEndedMark(t *testing.T) {
+	h := newHarness(t)
+	id := h.addAccount(t, "")
+	_ = h.st.SetLastSyncDate(daysAgo(3))
+	h.reloadState(t)
+	h.eb.endSession("CLOSED_SESSION")
+	h.syncer.run()
+
+	if err := h.st.RenewBankAccountSession(id, store.Renewal{
+		SessionID: "renewed", AccountUID: "renewed-uid", SessionExpiry: "2099-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("RenewBankAccountSession: %v", err)
+	}
+	h.eb.endSession("")
+	h.reloadState(t)
+	before := h.eb.accountRequests()
+
+	h.syncer.run()
+
+	if h.eb.accountRequests() == before {
+		t.Error("the renewed account was not fetched")
+	}
+	accounts, _ := h.st.GetAllBankAccounts()
+	if accounts[0].SessionEndedAt != "" {
+		t.Errorf("the renewal left the account marked as ended since %q", accounts[0].SessionEndedAt)
+	}
+	if msg := h.lastSyncLog(t).Message; strings.Contains(msg, "session has ended") {
+		t.Errorf("the run after renewal still reports the ended session: %q", msg)
+	}
 }

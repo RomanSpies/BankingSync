@@ -1095,15 +1095,19 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		httpCode = http.StatusServiceUnavailable
 	}
 
-	expiring := 0
+	expiring, ended := 0, 0
 	for _, a := range accounts {
+		if a.SessionEndedAt != "" {
+			ended++
+			continue
+		}
 		if t, err := time.Parse(time.RFC3339, a.SessionExpiry); err == nil {
 			if int(time.Until(t).Hours()/24) < 7 {
 				expiring++
 			}
 		}
 	}
-	if expiring > 0 && status == "ok" {
+	if (expiring > 0 || ended > 0) && status == "ok" {
 		status = "degraded"
 	}
 	if lastLog != nil && lastLog.Status != "success" && status == "ok" {
@@ -1188,6 +1192,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"version":            AppVersion,
 		"connected_accounts": len(accounts),
 		"expiring_sessions":  expiring,
+		"ended_sessions":     ended,
 		"backend":            backend,
 		"opening_balances":   opening,
 		"drift":              drift,

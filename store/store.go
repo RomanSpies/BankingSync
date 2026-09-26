@@ -51,6 +51,12 @@ type BankAccount struct {
 	// created before it was recorded.
 	IdentificationHash string
 
+	// SessionEndedAt is set when the bank reported the account's session over,
+	// and cleared by the renewal that replaces it. SessionExpiry alone cannot
+	// say this: a session can end long before the date it was granted until.
+	SessionEndedAt     string
+	SessionEndedReason string
+
 	OpeningBalanceState     string
 	OpeningBalanceCents     int64
 	OpeningBalanceDate      string
@@ -252,6 +258,8 @@ func (s *Store) migrate() error {
 		`ALTER TABLE bank_accounts ADD COLUMN iban TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE bank_accounts ADD COLUMN currency TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE bank_accounts ADD COLUMN identification_hash TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE bank_accounts ADD COLUMN session_ended_at TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE bank_accounts ADD COLUMN session_ended_reason TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE bank_accounts ADD COLUMN opening_balance_state TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE bank_accounts ADD COLUMN opening_balance_cents INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE bank_accounts ADD COLUMN opening_balance_date TEXT NOT NULL DEFAULT ''`,
@@ -522,6 +530,7 @@ func (s *Store) GetAllBankAccounts() ([]BankAccount, error) {
 		`SELECT id, session_id, account_uid, bank_name, bank_country, actual_account, start_sync_date,
 		        COALESCE(last_sync_date, ''), session_expiry, created_at,
 		        COALESCE(iban, ''), COALESCE(currency, ''), COALESCE(identification_hash, ''),
+		        COALESCE(session_ended_at, ''), COALESCE(session_ended_reason, ''),
 		        COALESCE(opening_balance_state, ''), COALESCE(opening_balance_cents, 0),
 		        COALESCE(opening_balance_date, ''), COALESCE(opening_balance_ref, ''),
 		        COALESCE(opening_balance_written_at, ''), COALESCE(balances_access, ''),
@@ -539,6 +548,7 @@ func (s *Store) GetAllBankAccounts() ([]BankAccount, error) {
 			&a.ID, &a.SessionID, &a.AccountUID, &a.BankName, &a.BankCountry,
 			&a.ActualAccount, &a.StartSyncDate, &a.LastSyncDate, &a.SessionExpiry,
 			&a.CreatedAt, &a.IBAN, &a.Currency, &a.IdentificationHash,
+			&a.SessionEndedAt, &a.SessionEndedReason,
 			&a.OpeningBalanceState, &a.OpeningBalanceCents,
 			&a.OpeningBalanceDate, &a.OpeningBalanceRef,
 			&a.OpeningBalanceWrittenAt, &a.BalancesAccess,
@@ -594,6 +604,14 @@ type Renewal struct {
 // next sync asks for an account whose session is closed and gets 401
 // CLOSED_SESSION.
 //
+// A renewal is a new consent, so what the old one said about balances no longer
+// holds. The balances scope is probed afresh on the next sync, and a denied
+// opening balance is returned to unset — not to auto, which would let the next
+// sync write an opening balance into a budget nobody asked it to touch. This
+// matters most after an ended session: the balances request fails first, with
+// the same 401 a refused scope returns, and the account used to be marked
+// denied permanently.
+//
 // The IBAN, currency and identification hash are filled in when the new session
 // supplies them and the row lacks them, which is the state of any account
 // connected before they were recorded. An existing value is never blanked by a
@@ -605,7 +623,11 @@ func (s *Store) RenewBankAccountSession(id int64, r Renewal) error {
 		SET session_id = ?, account_uid = ?, session_expiry = ?,
 		    iban = COALESCE(NULLIF(?, ''), iban),
 		    currency = COALESCE(NULLIF(?, ''), currency),
-		    identification_hash = COALESCE(NULLIF(?, ''), identification_hash)
+		    identification_hash = COALESCE(NULLIF(?, ''), identification_hash),
+		    session_ended_at = '', session_ended_reason = '',
+		    balances_access = '',
+		    opening_balance_state = CASE WHEN opening_balance_state = 'denied'
+		                                 THEN '' ELSE opening_balance_state END
 		WHERE id = ?`,
 		r.SessionID, r.AccountUID, r.SessionExpiry,
 		normaliseIBAN(r.IBAN), strings.ToUpper(strings.TrimSpace(r.Currency)),
@@ -618,6 +640,22 @@ func (s *Store) RenewBankAccountSession(id int64, r Renewal) error {
 		return fmt.Errorf("no bank account with id %d", id)
 	}
 	return nil
+}
+
+// MarkSessionEnded records that the bank reported the account's session over.
+//
+// The first report's time is kept. Every sync until the renewal reports the same
+// thing again, and the moment the session ended is the useful fact; the moment it
+// was last noticed is not.
+func (s *Store) MarkSessionEnded(id int64, reason string) error {
+	_, err := s.db.Exec(`
+		UPDATE bank_accounts
+		SET session_ended_at = CASE WHEN session_ended_at = '' THEN ? ELSE session_ended_at END,
+		    session_ended_reason = ?
+		WHERE id = ?`,
+		time.Now().UTC().Format(time.RFC3339), reason, id,
+	)
+	return err
 }
 
 // UpdateBankAccountStartDate sets a new sync start date for an account.

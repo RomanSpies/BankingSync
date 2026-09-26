@@ -114,6 +114,12 @@ func (c *Client) FetchBalances(ctx context.Context, accountUID string) ([]Balanc
 		return nil, err
 	}
 
+	if status != http.StatusOK {
+		if apiErr := parseAPIError(status, body); errors.Is(apiErr, ErrSessionEnded) {
+			return nil, apiErr
+		}
+	}
+
 	switch status {
 	case http.StatusOK:
 	case http.StatusUnauthorized, http.StatusForbidden:

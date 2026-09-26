@@ -2725,3 +2725,43 @@ func TestPickAccount_refusesAnAccountTheBankDidNotOffer(t *testing.T) {
 		t.Errorf("%d accounts written for an account the bank never offered", len(accounts))
 	}
 }
+
+// TestStatus_saysWhenTheBankEndedASession is the other half of the incident:
+// the page reported the account authorised because its expiry date was still
+// months ahead, while the bank had closed the session. An ended session now
+// replaces the countdown, and says what to do.
+func TestStatus_saysWhenTheBankEndedASession(t *testing.T) {
+	srv, st := newTestServer(t)
+	id, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s", AccountUID: "u", BankName: "Revolut", BankCountry: "LT", SessionExpiry: "2099-01-01T00:00:00Z"})
+	_ = st.MarkSessionEnded(id, "CLOSED_SESSION")
+
+	body := get(t, srv, "/status").Body.String()
+	if !strings.Contains(body, "renew required") {
+		t.Error("the status page does not say the account needs renewing")
+	}
+	if strings.Contains(body, "d left") {
+		t.Error("the status page still counts down days on a session the bank has closed")
+	}
+}
+
+// TestHealth_countsAnEndedSessionAsDegraded keeps /health from reporting ok for
+// an installation with an account that cannot sync at all. Degraded rather than
+// unhealthy: a restart fixes nothing here, and a health check that fails would
+// invite one.
+func TestHealth_countsAnEndedSessionAsDegraded(t *testing.T) {
+	srv, st := newTestServer(t)
+	id, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s", AccountUID: "u", BankName: "Revolut", BankCountry: "LT", SessionExpiry: "2099-01-01T00:00:00Z"})
+	_ = st.SetLastSyncDate("2026-09-25")
+	_ = st.MarkSessionEnded(id, "CLOSED_SESSION")
+
+	w := get(t, srv, "/health")
+	if w.Code != http.StatusOK {
+		t.Errorf("got %d, want 200 — degraded is not down", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), `"status":"degraded"`) {
+		t.Errorf("an account that cannot sync left health at: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"ended_sessions":1`) {
+		t.Errorf("health does not count the ended session: %s", w.Body.String())
+	}
+}

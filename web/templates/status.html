@@ -89,7 +89,9 @@
       </td>
       <td class="mono">{{.SessionExpiry}}</td>
       <td>
-        {{if .DaysLeft}}
+        {{if .SessionEndedAt}}
+          <span class="badge badge-red" title="The bank ended this session{{with .SessionEndedReason}} ({{.}}){{end}} on {{.SessionEndedAt}}. Renew the account to resume syncing."><span class="dot"></span>renew required</span>
+        {{else if .DaysLeft}}
           {{if lt .DaysLeft 7}}
             <span class="badge badge-red"><span class="dot"></span>{{.DaysLeft}}d left</span>
           {{else if lt .DaysLeft 30}}
