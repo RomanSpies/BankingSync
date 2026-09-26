@@ -624,7 +624,7 @@ func TestMigration_legacyUnscopedTablesAreAdoptedByOldestAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open must migrate the legacy schema: %v", err)
 	}
-	defer st.Close()
+	t.Cleanup(func() { _ = st.Close() })
 
 	accounts, err := st.GetAllBankAccounts()
 	if err != nil {
@@ -674,7 +674,7 @@ func TestMigration_isIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second open: %v", err)
 	}
-	defer st2.Close()
+	t.Cleanup(func() { _ = st2.Close() })
 
 	refs, _ := st2.AllImportedRefs()
 	if refs[1]["r1"] != "2026-07-20" {

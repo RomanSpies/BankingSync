@@ -508,7 +508,7 @@ func (c *Client) doWithRateLimitRetry(ctx context.Context, req *http.Request, he
 			return nil, 0, fmt.Errorf("GET %s: %w", req.URL.String(), err)
 		}
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != http.StatusTooManyRequests || attempt >= maxRateRetry {
 			return body, resp.StatusCode, nil

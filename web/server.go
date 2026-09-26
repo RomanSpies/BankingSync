@@ -420,7 +420,7 @@ func (s *Server) handleSetup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if file != nil {
-			defer file.Close()
+			defer func() { _ = file.Close() }()
 			pemBytes, err := io.ReadAll(file)
 			if err != nil {
 				s.render(w, "setup.html", setupData{Title: "Setup", Error: "PEM read error: " + err.Error()})
@@ -1210,7 +1210,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpCode)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleSBOM(w http.ResponseWriter, r *http.Request) {

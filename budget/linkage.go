@@ -558,11 +558,11 @@ func itoa(n int) string { return strconv.Itoa(n) }
 // that made it possible.
 func ClassificationVersion(tolerancePct int, toleranceCents int64, prefixes []string) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "tol=%d/%d near=%d\n", tolerancePct, toleranceCents, nearDays)
+	_, _ = fmt.Fprintf(h, "tol=%d/%d near=%d\n", tolerancePct, toleranceCents, nearDays)
 
 	sorted := append([]string(nil), prefixes...)
 	sort.Strings(sorted)
-	fmt.Fprintf(h, "prefixes=%s\n", strings.Join(sorted, ","))
+	_, _ = fmt.Fprintf(h, "prefixes=%s\n", strings.Join(sorted, ","))
 
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }
@@ -578,16 +578,16 @@ func (l Linkage) Version(auto, review, margin, overlap float64, tolerancePct int
 	writeLevels(h, "date.m", l.DateM)
 	writeLevels(h, "date.u", l.DateU)
 
-	fmt.Fprintf(h, "auto=%.6f review=%.6f margin=%.6f overlap=%.6f\n", auto, review, margin, overlap)
-	fmt.Fprintf(h, "tol=%d/%d near=%d\n", tolerancePct, toleranceCents, nearDays)
+	_, _ = fmt.Fprintf(h, "auto=%.6f review=%.6f margin=%.6f overlap=%.6f\n", auto, review, margin, overlap)
+	_, _ = fmt.Fprintf(h, "tol=%d/%d near=%d\n", tolerancePct, toleranceCents, nearDays)
 	// A rescaling changes every probability without changing a single level, so
 	// leaving it out would let two decisions made under different models claim
 	// the same identity.
-	fmt.Fprintf(h, "cal=%.9f/%.9f\n", calA, calB)
+	_, _ = fmt.Fprintf(h, "cal=%.9f/%.9f\n", calA, calB)
 
 	sorted := append([]string(nil), prefixes...)
 	sort.Strings(sorted)
-	fmt.Fprintf(h, "prefixes=%s\n", strings.Join(sorted, ","))
+	_, _ = fmt.Fprintf(h, "prefixes=%s\n", strings.Join(sorted, ","))
 
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }
@@ -601,7 +601,7 @@ func writeLevels[K ~int](h io.Writer, name string, table map[K]float64) {
 	}
 	sort.Ints(keys)
 	for _, k := range keys {
-		fmt.Fprintf(h, "%s[%d]=%.9f\n", name, k, table[K(k)])
+		_, _ = fmt.Fprintf(h, "%s[%d]=%.9f\n", name, k, table[K(k)])
 	}
 }
 

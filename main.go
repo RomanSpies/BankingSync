@@ -84,7 +84,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Startup failed: %v", err)
 	}
-	defer s.st.Close()
+	defer func() {
+		if err := s.st.Close(); err != nil {
+			log.Printf("Closing the state database: %v", err)
+		}
+	}()
 
 	webSrv, err := web.New(s.st, s.eb, s.run, sendTestEmail, web.TemplateFS)
 	if err != nil {
@@ -781,7 +785,7 @@ func (s *Syncer) run() bool {
 		if len(syncErrors) > 0 {
 			syncMessage = strings.Join(syncErrors, "; ")
 			var body strings.Builder
-			body.WriteString(fmt.Sprintf("BankingSync encountered %d error(s) during sync.\n\n", len(syncErrors)))
+			_, _ = fmt.Fprintf(&body, "BankingSync encountered %d error(s) during sync.\n\n", len(syncErrors))
 			for _, e := range syncErrors {
 				body.WriteString("- " + e + "\n")
 			}

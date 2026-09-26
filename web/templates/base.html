@@ -19,6 +19,7 @@
   --primary:  #dc2626;
   --primary-h:#b91c1c;
   --glow:     rgba(220,38,38,.12);
+  --primary-dim:rgba(220,38,38,.06);
   --green:    #22c55e;
   --green-dim:rgba(34,197,94,.08);
   --amber:    #eab308;
@@ -125,7 +126,7 @@ body{
 .alert-icon{flex-shrink:0;margin-top:.1rem;opacity:.8}
 .alert-error {background:var(--red-dim);  border:1px solid rgba(239,68,68,.2); color:#fca5a5}
 .alert-success{background:var(--green-dim);border:1px solid rgba(34,197,94,.2);color:#86efac}
-.alert-info  {background:rgba(220,38,38,.06);border:1px solid rgba(220,38,38,.15);color:#fca5a5}
+.alert-info  {background:var(--primary-dim);border:1px solid rgba(220,38,38,.15);color:#fca5a5}
 .alert-warn  {background:var(--amber-dim);border:1px solid rgba(234,179,8,.2);color:#fde047}
 
 /* Badges */
@@ -148,7 +149,7 @@ body{
    them. overflow-y stays hidden so the rounded corners still clip. */
 .tbl-wrap{border:1px solid var(--border);border-radius:var(--r);overflow-x:auto;overflow-y:hidden;margin-top:.25rem}
 table{width:100%;border-collapse:collapse;font-size:.8125rem}
-thead{background:rgba(220,38,38,.06)}
+thead{background:var(--primary-dim)}
 th{
   text-align:left;padding:.6rem 1rem;
   font-size:.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:.06em;

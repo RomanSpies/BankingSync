@@ -90,7 +90,7 @@ type NewBankAccount struct {
 
 // Open opens (or creates) the SQLite database at path and runs schema migrations.
 func Open(path string) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
 	}
 	// busy_timeout has to travel in the DSN, not through a PRAGMA statement.
@@ -335,7 +335,7 @@ func (s *Store) hasColumn(table, column string) bool {
 	if err != nil {
 		return false
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
@@ -540,7 +540,7 @@ func (s *Store) GetAllBankAccounts() ([]BankAccount, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var accounts []BankAccount
 	for rows.Next() {
 		var a BankAccount
@@ -787,7 +787,7 @@ func (s *Store) AllImportedRefs() (map[int64]map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	m := make(map[int64]map[string]string)
 	for rows.Next() {
 		var acct int64
@@ -839,7 +839,7 @@ func (s *Store) AllPendingMap() (map[int64]map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	m := make(map[int64]map[string]string)
 	for rows.Next() {
 		var acct int64
@@ -894,7 +894,7 @@ func (s *Store) GetSyncLogs(limit int) ([]SyncLog, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var logs []SyncLog
 	for rows.Next() {
 		var l SyncLog
@@ -1068,7 +1068,7 @@ func (s *Store) GetMatchReviews() ([]MatchReview, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var out []MatchReview
 	for rows.Next() {
@@ -1154,7 +1154,7 @@ func (s *Store) AllHeldKeys() (map[int64]map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	out := make(map[int64]map[string]bool)
 	for rows.Next() {

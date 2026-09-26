@@ -396,7 +396,10 @@ func TestHandleSyncNow_GET_returns404(t *testing.T) {
 func TestHandleSyncNow_POST_returnsOK(t *testing.T) {
 	st := openTestStore(t)
 	triggered := make(chan struct{}, 1)
-	srv, err := New(st, noopEB(), func() bool { triggered <- struct{}{}; return true }, nil, TemplateFS)
+	srv, err := New(st, noopEB(), func() bool {
+		triggered <- struct{}{}
+		return true
+	}, nil, TemplateFS)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -412,7 +415,10 @@ func TestHandleSyncNow_POST_returnsOK(t *testing.T) {
 func TestHandleSyncNow_POST_alreadyRunning_returnsNotOK(t *testing.T) {
 	st := openTestStore(t)
 	block := make(chan struct{})
-	srv, _ := New(st, noopEB(), func() bool { <-block; return true }, nil, TemplateFS)
+	srv, _ := New(st, noopEB(), func() bool {
+		<-block
+		return true
+	}, nil, TemplateFS)
 
 	// Start first sync (goroutine will block on channel)
 	w1 := post(t, srv, "/sync/now", nil)

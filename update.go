@@ -88,7 +88,7 @@ func fetchLatestVersion(ctx context.Context) (string, error) {
 		span.SetStatus(codes.Error, err.Error())
 		return "", fmt.Errorf("GET tags: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("HTTP %d: %s", resp.StatusCode, body)

@@ -247,7 +247,7 @@ func (c *Client) GetASPSPs(ctx context.Context) ([]ASPSP, error) {
 		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("GET /aspsps: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("GET /aspsps HTTP %d: %s", resp.StatusCode, body)
@@ -324,7 +324,7 @@ func (c *Client) StartAuth(ctx context.Context, bankName, bankCountry, psuType, 
 		span.SetStatus(codes.Error, err.Error())
 		return "", time.Time{}, fmt.Errorf("POST /auth: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("POST /auth HTTP %d: %s", resp.StatusCode, raw)
@@ -374,7 +374,7 @@ func (c *Client) CompleteAuth(ctx context.Context, code, state string) (*Session
 		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("POST /sessions: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		err := fmt.Errorf("POST /sessions HTTP %d: %s", resp.StatusCode, raw)

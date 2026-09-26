@@ -125,7 +125,7 @@ func DeleteTransactionGroup(ctx context.Context, baseURL, token, groupID string)
 	if err != nil {
 		return fmt.Errorf("deleting transaction group %s: %w", groupID, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("deleting transaction group %s: HTTP %d", groupID, resp.StatusCode)
 	}
@@ -141,7 +141,7 @@ func apiGet(ctx context.Context, baseURL, token, path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var buf bytes.Buffer
 	if _, err := buf.ReadFrom(resp.Body); err != nil {

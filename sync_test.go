@@ -6856,7 +6856,7 @@ func TestSync_theSampleSurvivesRunsAndDiesWithItsParameters(t *testing.T) {
 	settle(5, 3, "Kino Astor", "Baecker Sued")
 	after3 := totalObservations(t, h, version)
 
-	if !(after3 > after2) {
+	if after3 <= after2 {
 		t.Fatalf("the tally did not grow across runs: %d then %d", after2, after3)
 	}
 
