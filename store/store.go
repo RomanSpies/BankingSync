@@ -565,13 +565,36 @@ func (s *Store) AddBankAccount(a NewBankAccount) (int64, error) {
 	return res.LastInsertId()
 }
 
-// UpdateBankAccountSession updates the session credentials for an existing account.
-func (s *Store) UpdateBankAccountSession(id int64, sessionID, expiry string) error {
-	_, err := s.db.Exec(
-		`UPDATE bank_accounts SET session_id = ?, session_expiry = ? WHERE id = ?`,
-		sessionID, expiry, id,
+// RenewBankAccountSession points an existing account at a newly authorised
+// session.
+//
+// The account UID moves with the session. Enable Banking issues account UIDs
+// per session and documents each as valid only while its own session is
+// authorised, and every fetch addresses the account by that UID alone — the
+// session ID appears in no request. Renewing the session while keeping the old
+// UID therefore changes what the status page reports and nothing else: the
+// next sync asks for an account whose session is closed and gets 401
+// CLOSED_SESSION.
+//
+// The IBAN and currency are filled in when the new session supplies them and
+// the row lacks them, which is the state of any account connected before they
+// were recorded. An existing value is never blanked by a session that omits it.
+func (s *Store) RenewBankAccountSession(id int64, sessionID, accountUID, expiry, iban, currency string) error {
+	res, err := s.db.Exec(`
+		UPDATE bank_accounts
+		SET session_id = ?, account_uid = ?, session_expiry = ?,
+		    iban = COALESCE(NULLIF(?, ''), iban),
+		    currency = COALESCE(NULLIF(?, ''), currency)
+		WHERE id = ?`,
+		sessionID, accountUID, expiry, iban, currency, id,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("no bank account with id %d", id)
+	}
+	return nil
 }
 
 // UpdateBankAccountStartDate sets a new sync start date for an account.

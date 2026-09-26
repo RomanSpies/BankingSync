@@ -585,8 +585,15 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	_ = s.st.SetSetting("pending_auth_url", "")
 
 	if renewAccountID != "" && len(sr.Accounts) == 1 {
-		id, _ := strconv.ParseInt(renewAccountID, 10, 64)
-		_ = s.st.UpdateBankAccountSession(id, sr.SessionID, expiry)
+		id, err := strconv.ParseInt(renewAccountID, 10, 64)
+		if err == nil {
+			a := sr.Accounts[0]
+			err = s.st.RenewBankAccountSession(id, sr.SessionID, a.EffectiveUID(), expiry, a.IBAN, a.Currency)
+		}
+		if err != nil {
+			http.Redirect(w, r, "/connect?error="+urlEncode("Renewal failed: "+err.Error()), http.StatusFound)
+			return
+		}
 		http.Redirect(w, r, "/status", http.StatusFound)
 		return
 	}
