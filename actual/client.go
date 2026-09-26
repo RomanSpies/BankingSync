@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -206,7 +207,7 @@ func (c *Client) login(ctx context.Context, password string) error {
 		} `json:"data"`
 		Reason string `json:"reason"`
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
 		err := fmt.Errorf("login HTTP %d: %s", resp.StatusCode, snippet(raw))
@@ -247,7 +248,7 @@ func (c *Client) setFile(ctx context.Context, id string) error {
 	var body struct {
 		Data []remoteFile `json:"data"`
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("list-user-files HTTP %d: %s", resp.StatusCode, raw)
@@ -304,7 +305,7 @@ func (c *Client) downloadBudget(ctx context.Context) error {
 	}
 	span.SetAttributes(attribute.Bool("cache_hit", false))
 
-	if err := os.MkdirAll(c.dataDir, 0o755); err != nil {
+	if err := os.MkdirAll(c.dataDir, 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", c.dataDir, err)
 	}
 
@@ -316,7 +317,7 @@ func (c *Client) downloadBudget(ctx context.Context) error {
 		span.SetStatus(codes.Error, err.Error())
 		return fmt.Errorf("download-user-file: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	zipBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
@@ -411,7 +412,7 @@ func (c *Client) syncSync(ctx context.Context, req SyncRequest) (*SyncResponse, 
 		span.SetStatus(codes.Error, err.Error())
 		return nil, fmt.Errorf("POST sync/sync: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
 		err := fmt.Errorf("sync/sync HTTP %d: %s", resp.StatusCode, raw)
@@ -441,14 +442,13 @@ func extractZip(data []byte, destDir string) error {
 		}
 		rc, err := f.Open()
 		if err != nil {
-			out.Close()
+			_ = out.Close()
 			return err
 		}
-		_, err = io.Copy(out, rc)
-		rc.Close()
-		out.Close()
-		if err != nil {
-			return err
+		_, copyErr := io.Copy(out, rc)
+		_ = rc.Close()
+		if err := errors.Join(copyErr, out.Close()); err != nil {
+			return fmt.Errorf("extract %s: %w", base, err)
 		}
 		if base == "db.sqlite" {
 			gotDB = true
@@ -487,7 +487,7 @@ func patchMetaGroupID(path, groupID string) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(path, patched, 0o644)
+	_ = os.WriteFile(path, patched, 0o600)
 }
 
 // DB returns the underlying SQLite wrapper for direct access.

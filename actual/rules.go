@@ -59,7 +59,7 @@ func (d *DB) LoadRules() (*RuleSet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("query rules: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var rs RuleSet
 	for rows.Next() {
@@ -335,9 +335,10 @@ func applyAction(d *DB, t *Transaction, a Action) error {
 
 	case "notes":
 		notes := toString(a.Value)
-		if a.Op == "prepend-notes" {
+		switch a.Op {
+		case "prepend-notes":
 			notes = notes + t.Notes
-		} else if a.Op == "append-notes" {
+		case "append-notes":
 			notes = t.Notes + notes
 		}
 		notes = strings.TrimSpace(notes)

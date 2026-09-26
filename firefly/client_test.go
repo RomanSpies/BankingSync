@@ -225,7 +225,7 @@ func TestClient_refusesToFollowARedirect(t *testing.T) {
 		if r.URL.Path == "/login" {
 			atomic.AddInt32(&landed, 1)
 			w.Header().Set("Content-Type", "text/html")
-			fmt.Fprint(w, "<!DOCTYPE html><html><body>Sign in</body></html>")
+			_, _ = fmt.Fprint(w, "<!DOCTYPE html><html><body>Sign in</body></html>")
 			return
 		}
 		http.Redirect(w, r, "/login", http.StatusFound)

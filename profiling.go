@@ -68,7 +68,7 @@ func (w *profTracer) Start(ctx context.Context, spanName string, opts ...trace.S
 	sc := span.SpanContext()
 	addID := w.p.config.spanIDScope != profileScopeNone && sc.IsSampled()
 	addName := w.p.config.spanNameScope != profileScopeNone && spanName != ""
-	if !(addID || addName) {
+	if !addID && !addName {
 		return ctx, span
 	}
 

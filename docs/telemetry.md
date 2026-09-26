@@ -454,6 +454,7 @@ Every record the program can emit, by area:
 |---|---|
 | `sync` | `sync.started` (I), `sync.finished` (I) |
 | `fetch_transactions` | `.completed` (I), `.failed` (E) |
+| `session` | `session.ended` (W) — the bank reported the account's session over (`reason` carries its code, e.g. `CLOSED_SESSION`); the account is skipped until it is renewed |
 | `import` | `import.batch.completed` (I) |
 | `transaction` / `transactions` | `transaction.parse.failed` (W), `transactions.dropped` (E) |
 | `match` | `match.held_for_review` (W), `match.near_miss` (W), `match.hold_failed` (E), `match.review_resolved` (I), `match.inquiry_raised` (I), `match.inquiry_answered` (I), `match.trial_watched` (I), `match.trial_promoted` (I), `match.trial_reverted` (I), `match.trial_dropped` (I), `match.decision_not_recorded` (W), `match.inquiry_not_recorded` (W), `match.usample_not_recorded` (W) |

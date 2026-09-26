@@ -280,7 +280,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		}
 
 		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		c.obs.recordRequest(ctx, method, route, resp.StatusCode)
 

@@ -59,12 +59,12 @@ func (f *fakeFirefly) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case r.URL.Path == "/register" && r.Method == http.MethodGet:
-		fmt.Fprint(w, f.form(registerCSRF))
+		_, _ = fmt.Fprint(w, f.form(registerCSRF))
 
 	case r.URL.Path == "/register" && r.Method == http.MethodPost:
 		if err := r.ParseForm(); err != nil || r.PostForm.Get("_token") != registerCSRF {
 			w.WriteHeader(http.StatusUnprocessableEntity)
-			fmt.Fprint(w, `<ul><li>The token is invalid.</li></ul>`)
+			_, _ = fmt.Fprint(w, `<ul><li>The token is invalid.</li></ul>`)
 			return
 		}
 		f.hasUser, f.loggedIn = true, true
@@ -80,13 +80,13 @@ func (f *fakeFirefly) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusFound)
 			return
 		}
-		fmt.Fprint(w, f.form(registerCSRF))
+		_, _ = fmt.Fprint(w, f.form(registerCSRF))
 
 	case r.URL.Path == "/login" && r.Method == http.MethodPost:
 		_ = r.ParseForm()
 		if r.PostForm.Get("email") != DefaultEmail || r.PostForm.Get("password") != DefaultPassword {
 			w.WriteHeader(http.StatusOK)
-			fmt.Fprint(w, `<ul><li>These credentials do not match our records.</li></ul>`)
+			_, _ = fmt.Fprint(w, `<ul><li>These credentials do not match our records.</li></ul>`)
 			return
 		}
 		f.loggedIn = true
@@ -99,7 +99,7 @@ func (f *fakeFirefly) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusFound)
 			return
 		}
-		fmt.Fprint(w, f.form(profileCSRF))
+		_, _ = fmt.Fprint(w, f.form(profileCSRF))
 
 	case r.URL.Path == "/oauth/personal-access-tokens" && r.Method == http.MethodPost:
 		if r.Header.Get("X-CSRF-TOKEN") != profileCSRF {
@@ -109,25 +109,25 @@ func (f *fakeFirefly) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !f.hasPersonalClient {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
-			fmt.Fprint(w, `{"message":"Personal access client not found for 'users' user provider."}`)
+			_, _ = fmt.Fprint(w, `{"message":"Personal access client not found for 'users' user provider."}`)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"accessToken":%q,"token":{"id":"1"}}`, issuedToken)
+		_, _ = fmt.Fprintf(w, `{"accessToken":%q,"token":{"id":"1"}}`, issuedToken)
 
 	case r.URL.Path == "/api/v1/about":
 		if r.Header.Get("Authorization") != "Bearer "+issuedToken {
 			w.WriteHeader(http.StatusUnauthorized)
-			fmt.Fprint(w, `{"message":"Unauthenticated."}`)
+			_, _ = fmt.Fprint(w, `{"message":"Unauthenticated."}`)
 			return
 		}
 		if f.aboutStatus != 0 {
 			w.WriteHeader(f.aboutStatus)
-			fmt.Fprint(w, `{"message":"nope"}`)
+			_, _ = fmt.Fprint(w, `{"message":"nope"}`)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"data":{"version":"6.6.6","api_version":"2.1.0","os":"Linux","driver":"sqlite"}}`)
+		_, _ = fmt.Fprint(w, `{"data":{"version":"6.6.6","api_version":"2.1.0","os":"Linux","driver":"sqlite"}}`)
 
 	default:
 		w.WriteHeader(http.StatusNotFound)

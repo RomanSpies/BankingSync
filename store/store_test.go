@@ -171,18 +171,86 @@ func TestGetAllBankAccounts_orderedByCreation(t *testing.T) {
 	}
 }
 
-func TestUpdateBankAccountSession(t *testing.T) {
+// TestRenewBankAccountSession_movesTheAccountUIDWithTheSession is the renewal
+// that used to leave an account unusable.
+//
+// Enable Banking issues account UIDs per session, valid only while that session
+// is authorised, and every fetch addresses the account by UID alone. The
+// renewal wrote the new session ID and expiry but kept the UID from the first
+// connection, so the status page reported the account authorised while every
+// sync asked for it under a closed session and got 401 CLOSED_SESSION. The test
+// this replaces checked the session and the expiry and never looked at the UID.
+func TestRenewBankAccountSession_movesTheAccountUIDWithTheSession(t *testing.T) {
 	st := openTestStore(t)
-	id, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "old-sess", AccountUID: "acct", BankName: "Bank", BankCountry: "DE", SessionExpiry: "2025-01-01T00:00:00Z"})
-	if err := st.UpdateBankAccountSession(id, "new-sess", "2026-01-01T00:00:00Z"); err != nil {
-		t.Fatalf("UpdateBankAccountSession: %v", err)
+	id, _ := st.AddBankAccount(store.NewBankAccount{
+		SessionID: "old-sess", AccountUID: "old-uid", BankName: "Revolut", BankCountry: "DE",
+		SessionExpiry: "2026-09-20T00:00:00Z",
+	})
+
+	if err := st.RenewBankAccountSession(id, store.Renewal{
+		SessionID: "new-sess", AccountUID: "new-uid", SessionExpiry: "2027-03-25T09:58:41Z",
+		IBAN: "de00 test", Currency: "eur", IdentificationHash: "hash-1",
+	}); err != nil {
+		t.Fatalf("RenewBankAccountSession: %v", err)
 	}
+
 	accounts, _ := st.GetAllBankAccounts()
-	if accounts[0].SessionID != "new-sess" {
-		t.Errorf("SessionID: got %q, want new-sess", accounts[0].SessionID)
+	if len(accounts) != 1 {
+		t.Fatalf("%d accounts after renewal, want the one that was renewed", len(accounts))
 	}
-	if accounts[0].SessionExpiry != "2026-01-01T00:00:00Z" {
-		t.Errorf("SessionExpiry: got %q", accounts[0].SessionExpiry)
+	a := accounts[0]
+	if a.ID != id {
+		t.Errorf("renewal produced row %d, want %d — a new row loses the account's import history", a.ID, id)
+	}
+	if a.AccountUID != "new-uid" {
+		t.Errorf("AccountUID: got %q, want new-uid — the old UID belongs to a closed session", a.AccountUID)
+	}
+	if a.SessionID != "new-sess" || a.SessionExpiry != "2027-03-25T09:58:41Z" {
+		t.Errorf("session: got %q until %q", a.SessionID, a.SessionExpiry)
+	}
+	if a.IBAN != "DE00TEST" || a.Currency != "EUR" {
+		t.Errorf("an account connected without an IBAN and currency was not given them, normalised: %q %q",
+			a.IBAN, a.Currency)
+	}
+	if a.IdentificationHash != "hash-1" {
+		t.Errorf("IdentificationHash: got %q, want hash-1 — without it the next renewal cannot match by hash",
+			a.IdentificationHash)
+	}
+}
+
+// TestRenewBankAccountSession_keepsWhatTheNewSessionOmits guards the backfill
+// in the other direction. A session that returns no IBAN says nothing about
+// the account; it is not evidence that the account has none.
+func TestRenewBankAccountSession_keepsWhatTheNewSessionOmits(t *testing.T) {
+	st := openTestStore(t)
+	id, _ := st.AddBankAccount(store.NewBankAccount{
+		SessionID: "old-sess", AccountUID: "old-uid", BankName: "Bank", BankCountry: "DE",
+		SessionExpiry: "2026-09-20T00:00:00Z", IBAN: "DE00KEEP", Currency: "EUR",
+		IdentificationHash: "hash-keep",
+	})
+
+	if err := st.RenewBankAccountSession(id, store.Renewal{SessionID: "new-sess", AccountUID: "new-uid", SessionExpiry: "2027-03-25T00:00:00Z"}); err != nil {
+		t.Fatalf("RenewBankAccountSession: %v", err)
+	}
+
+	accounts, _ := st.GetAllBankAccounts()
+	if accounts[0].IBAN != "DE00KEEP" || accounts[0].Currency != "EUR" {
+		t.Errorf("a renewal that omitted the IBAN and currency blanked them: %q %q",
+			accounts[0].IBAN, accounts[0].Currency)
+	}
+	if accounts[0].IdentificationHash != "hash-keep" {
+		t.Errorf("a renewal that omitted the identification hash blanked it: %q",
+			accounts[0].IdentificationHash)
+	}
+}
+
+// TestRenewBankAccountSession_refusesAnUnknownAccount keeps a renewal against
+// a removed account from reporting success. The handler used to discard the
+// error and redirect to the status page regardless.
+func TestRenewBankAccountSession_refusesAnUnknownAccount(t *testing.T) {
+	st := openTestStore(t)
+	if err := st.RenewBankAccountSession(999, store.Renewal{SessionID: "new-sess", AccountUID: "new-uid", SessionExpiry: "2027-03-25T00:00:00Z"}); err == nil {
+		t.Error("renewing an account that does not exist reported success")
 	}
 }
 
@@ -556,7 +624,7 @@ func TestMigration_legacyUnscopedTablesAreAdoptedByOldestAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open must migrate the legacy schema: %v", err)
 	}
-	defer st.Close()
+	t.Cleanup(func() { _ = st.Close() })
 
 	accounts, err := st.GetAllBankAccounts()
 	if err != nil {
@@ -606,7 +674,7 @@ func TestMigration_isIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second open: %v", err)
 	}
-	defer st2.Close()
+	t.Cleanup(func() { _ = st2.Close() })
 
 	refs, _ := st2.AllImportedRefs()
 	if refs[1]["r1"] != "2026-07-20" {
@@ -1778,5 +1846,70 @@ func TestLevelObservations_migratesAnExistingSample(t *testing.T) {
 	}
 	if after, _ := st.LevelObservations("old-scope"); len(after) != 1 || after[0].Count != 50 {
 		t.Errorf("the upsert did not find the renamed column: %+v", after)
+	}
+}
+
+// TestMarkSessionEnded_keepsTheFirstReport records when the session ended, not
+// when it was last noticed. Every sync until the renewal reports it again.
+func TestMarkSessionEnded_keepsTheFirstReport(t *testing.T) {
+	st := openTestStore(t)
+	id, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s", AccountUID: "u", BankName: "B", BankCountry: "DE", SessionExpiry: "2099-01-01T00:00:00Z"})
+
+	if err := st.MarkSessionEnded(id, "CLOSED_SESSION"); err != nil {
+		t.Fatalf("MarkSessionEnded: %v", err)
+	}
+	first, _ := st.GetAllBankAccounts()
+	if first[0].SessionEndedAt == "" || first[0].SessionEndedReason != "CLOSED_SESSION" {
+		t.Fatalf("not marked: %+v", first[0])
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+	_ = st.MarkSessionEnded(id, "CLOSED_SESSION")
+	again, _ := st.GetAllBankAccounts()
+	if again[0].SessionEndedAt != first[0].SessionEndedAt {
+		t.Errorf("the ended time moved from %q to %q on a repeated report",
+			first[0].SessionEndedAt, again[0].SessionEndedAt)
+	}
+}
+
+// TestRenewBankAccountSession_forgetsWhatTheOldConsentSaid covers the state a
+// closed session used to leave behind. A renewal is a new consent: the ended
+// mark goes, the balances scope is probed afresh, and a denied opening balance
+// returns to unset. Not to auto — auto lets the next sync write an opening
+// balance unattended, and an account connected before opening balances existed
+// must never gain a transaction nobody asked for. A balance already written is
+// left exactly as it is.
+func TestRenewBankAccountSession_forgetsWhatTheOldConsentSaid(t *testing.T) {
+	st := openTestStore(t)
+	denied, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s1", AccountUID: "u1", BankName: "B", BankCountry: "DE", SessionExpiry: "2099-01-01T00:00:00Z"})
+	written, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s2", AccountUID: "u2", BankName: "B", BankCountry: "DE", SessionExpiry: "2099-01-01T00:00:00Z"})
+	_ = st.MarkSessionEnded(denied, "CLOSED_SESSION")
+	_ = st.SetBalancesAccess(denied, "denied")
+	_ = st.SetOpeningBalanceState(denied, store.OpeningBalanceDenied)
+	_ = st.SetOpeningBalanceState(written, store.OpeningBalanceWritten)
+
+	for _, id := range []int64{denied, written} {
+		if err := st.RenewBankAccountSession(id, store.Renewal{SessionID: "new", AccountUID: "new-uid", SessionExpiry: "2099-06-01T00:00:00Z"}); err != nil {
+			t.Fatalf("RenewBankAccountSession: %v", err)
+		}
+	}
+
+	byID := map[int64]store.BankAccount{}
+	accounts, _ := st.GetAllBankAccounts()
+	for _, a := range accounts {
+		byID[a.ID] = a
+	}
+	d := byID[denied]
+	if d.SessionEndedAt != "" || d.SessionEndedReason != "" {
+		t.Errorf("the ended mark survived the renewal: %q %q", d.SessionEndedAt, d.SessionEndedReason)
+	}
+	if d.BalancesAccess != "" {
+		t.Errorf("BalancesAccess: got %q, want it probed afresh", d.BalancesAccess)
+	}
+	if d.OpeningBalanceState != "" {
+		t.Errorf("OpeningBalanceState: got %q, want unset — auto would write into the budget unattended", d.OpeningBalanceState)
+	}
+	if w := byID[written]; w.OpeningBalanceState != store.OpeningBalanceWritten {
+		t.Errorf("a written opening balance was disturbed by the renewal: %q", w.OpeningBalanceState)
 	}
 }

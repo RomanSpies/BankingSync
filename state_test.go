@@ -297,7 +297,7 @@ func TestLoadFromStore_empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	defer st.Close()
+	t.Cleanup(func() { _ = st.Close() })
 
 	s, err := LoadFromStore(st)
 	if err != nil {

@@ -106,7 +106,7 @@ func (d *DB) warmCaches() error {
 	if err != nil {
 		return fmt.Errorf("load payees: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id, name string
 		if err := rows.Scan(&id, &name); err != nil {
@@ -128,7 +128,7 @@ func (d *DB) warmCaches() error {
 	if err != nil {
 		return fmt.Errorf("load accounts: %w", err)
 	}
-	defer arows.Close()
+	defer func() { _ = arows.Close() }()
 	for arows.Next() {
 		var id, name string
 		if err := arows.Scan(&id, &name); err != nil {
@@ -315,7 +315,7 @@ func tableColumns(tx *sql.Tx, table string) (map[string]bool, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var cols map[string]bool
 	for rows.Next() {
@@ -374,11 +374,15 @@ func isSafeIdentifier(s string) bool {
 		return false
 	}
 	for _, c := range s {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_') {
+		if !isIdentifierRune(c) {
 			return false
 		}
 	}
 	return true
+}
+
+func isIdentifierRune(c rune) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
 }
 
 func decodeProtoValue(s string) any {
@@ -529,7 +533,7 @@ func (d *DB) getTransactions(accountID string, lo, hi *int) ([]*Transaction, err
 	if err != nil {
 		return nil, fmt.Errorf("query transactions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var txns []*Transaction
 	for rows.Next() {
@@ -780,7 +784,7 @@ func (d *DB) matchTransaction(
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	exclude := make(map[string]struct{}, len(alreadyMatched))
 	for _, t := range alreadyMatched {

@@ -187,7 +187,7 @@ func (c *Client) fetchPage(ctx context.Context, url string, headers map[string]s
 		return nil, "", err
 	}
 	if status != http.StatusOK {
-		err := fmt.Errorf("unexpected HTTP %d from Enable Banking: %s", status, body)
+		err := parseAPIError(status, body)
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return nil, "", err
@@ -508,7 +508,7 @@ func (c *Client) doWithRateLimitRetry(ctx context.Context, req *http.Request, he
 			return nil, 0, fmt.Errorf("GET %s: %w", req.URL.String(), err)
 		}
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != http.StatusTooManyRequests || attempt >= maxRateRetry {
 			return body, resp.StatusCode, nil

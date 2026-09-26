@@ -149,7 +149,7 @@ func scrubBytes(in []byte) ([]byte, error) {
 }
 
 func scrubFile(inPath, outPath string) error {
-	raw, err := os.ReadFile(inPath)
+	raw, err := os.ReadFile(filepath.Clean(inPath))
 	if err != nil {
 		return err
 	}
@@ -157,10 +157,10 @@ func scrubFile(inPath, outPath string) error {
 	if err != nil {
 		return fmt.Errorf("%s: %w", inPath, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outPath), 0o750); err != nil {
 		return err
 	}
-	return os.WriteFile(outPath, clean, 0o644)
+	return os.WriteFile(outPath, clean, 0o600)
 }
 
 func run(in, out string) error {

@@ -20,7 +20,11 @@
   <span class="alert-icon">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
   </span>
+  {{if .Renewing}}
+  <span>Your bank returned more than one account, and none of them could be matched to <strong>{{.RenewingName}}</strong> automatically. Choose the one that is <strong>{{.RenewingName}}</strong>. It keeps its {{.BackendLabel}} account and its import history.</span>
+  {{else}}
   <span>Choose the bank account to sync and the {{.BackendLabel}} account it should import into.</span>
+  {{end}}
 </div>
 
 <form method="POST" action="/pick-account">
@@ -42,6 +46,7 @@
   </label>
   {{end}}
 
+  {{if not .Renewing}}
   <hr class="divider">
 
   <div class="field">
@@ -56,11 +61,12 @@
     <input id="start-sync-date" type="date" name="start_sync_date" value="{{.DefaultStartDate}}">
     <p class="field-hint">Transactions from this date onwards will be imported on the first sync. Leave as-is for the last 30 days.</p>
   </div>
+  {{end}}
 
   <div class="mt-lg">
     <button type="submit" class="btn btn-primary">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
-      Use this account
+      {{if .Renewing}}Renew this account{{else}}Use this account{{end}}
     </button>
   </div>
 </form>

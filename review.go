@@ -410,10 +410,10 @@ func explainComparison(c budget.Comparison, candidate time.Time, heldDate string
 	}
 
 	if held, err := time.Parse("2006-01-02", heldDate); err == nil {
-		switch d := daysBetween(candidate, held); {
-		case d == 0:
+		switch d := daysBetween(candidate, held); d {
+		case 0:
 			parts = append(parts, "same day")
-		case d == 1:
+		case 1:
 			parts = append(parts, "1 day apart")
 		default:
 			parts = append(parts, fmt.Sprintf("%d days apart", d))

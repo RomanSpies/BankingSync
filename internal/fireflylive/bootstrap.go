@@ -281,7 +281,7 @@ func (s *session) do(req *http.Request) (int, string, error) {
 	if err != nil {
 		return 0, "", fmt.Errorf("%s %s: %w", req.Method, req.URL.Path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {

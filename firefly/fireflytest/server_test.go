@@ -47,7 +47,7 @@ func TestServer_requiresBearer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("an unauthenticated request must be rejected, got %d", resp.StatusCode)
 	}
@@ -428,7 +428,7 @@ func TestSearchAccounts_isASubstringMatchForNameAndIBAN(t *testing.T) {
 			if err != nil {
 				t.Fatalf("get: %v", err)
 			}
-			defer res.Body.Close()
+			defer func() { _ = res.Body.Close() }()
 
 			var body struct {
 				Data []json.RawMessage `json:"data"`
@@ -477,7 +477,7 @@ func TestUpdateAccount_openingBalanceFieldsAreMutuallyRequired(t *testing.T) {
 			if err != nil {
 				t.Fatalf("put: %v", err)
 			}
-			defer res.Body.Close()
+			defer func() { _ = res.Body.Close() }()
 
 			if res.StatusCode != tc.status {
 				t.Errorf("status: got %d, want %d", res.StatusCode, tc.status)

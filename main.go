@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -83,7 +84,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Startup failed: %v", err)
 	}
-	defer s.st.Close()
+	defer func() {
+		if err := s.st.Close(); err != nil {
+			log.Printf("Closing the state database: %v", err)
+		}
+	}()
 
 	webSrv, err := web.New(s.st, s.eb, s.run, sendTestEmail, web.TemplateFS)
 	if err != nil {
@@ -780,7 +785,7 @@ func (s *Syncer) run() bool {
 		if len(syncErrors) > 0 {
 			syncMessage = strings.Join(syncErrors, "; ")
 			var body strings.Builder
-			body.WriteString(fmt.Sprintf("BankingSync encountered %d error(s) during sync.\n\n", len(syncErrors)))
+			_, _ = fmt.Fprintf(&body, "BankingSync encountered %d error(s) during sync.\n\n", len(syncErrors))
 			for _, e := range syncErrors {
 				body.WriteString("- " + e + "\n")
 			}
@@ -946,11 +951,22 @@ func (s *Syncer) run() bool {
 			dateFrom = earliest
 		}
 
+		if acct.SessionEndedAt != "" {
+			syncErrors = append(syncErrors, sessionEndedMessage(label, acct.SessionEndedReason))
+			fetchFailed++
+			continue
+		}
+
 		// Balances are read before the transactions and again after the import.
 		// Both readings have to agree before an opening balance is derived from
 		// them; an account that moved during the run is deferred rather than
 		// written wrong, because the value is written once and never revised.
 		balancesBefore, balanceErr := s.readBalances(ctx, acct)
+		if errors.Is(balanceErr, enablebanking.ErrSessionEnded) {
+			syncErrors = append(syncErrors, s.sessionEnded(ctx, acct, label, balanceErr))
+			fetchFailed++
+			continue
+		}
 
 		fetchStart := time.Now()
 		fetchCtx, fetchSpan := tracer.Start(ctx, "enable_banking.fetch_transactions",
@@ -980,7 +996,11 @@ func (s *Syncer) run() bool {
 				logs.String("error", err.Error()),
 			)
 			span.RecordError(err)
-			syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", label, err))
+			if errors.Is(err, enablebanking.ErrSessionEnded) {
+				syncErrors = append(syncErrors, s.sessionEnded(ctx, acct, label, err))
+			} else {
+				syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", label, err))
+			}
 			fetchFailed++
 			continue
 		}
@@ -2060,4 +2080,37 @@ func (s *Syncer) recordReferenceLabel(
 			attribute.String("agreed", agreed),
 			attribute.String("bank", label)))
 	}
+}
+
+// sessionEnded records that the bank reported an account's session over and
+// returns what the sync log says about it.
+//
+// The account is marked so that later syncs stop asking: a closed session does
+// not reopen, and Enable Banking's instruction for it is a new authorisation,
+// not a retry. The mark is also what lets the status page stop reporting the
+// account authorised on the strength of an expiry date the bank no longer
+// honours.
+func (s *Syncer) sessionEnded(ctx context.Context, acct store.BankAccount, label string, err error) string {
+	reason := ""
+	var apiErr *enablebanking.APIError
+	if errors.As(err, &apiErr) {
+		reason = apiErr.Code
+	}
+	if markErr := s.st.MarkSessionEnded(acct.ID, reason); markErr != nil {
+		bookkeepingFailed(ctx, "MarkSessionEnded", label, "", markErr)
+	}
+	log.Printf("[%s] the bank session has ended (%s); renew the account to resume syncing", label, reason)
+	olog.Warn(ctx, "session.ended",
+		logs.String("bank", label),
+		logs.String("reason", reason),
+	)
+	return sessionEndedMessage(label, reason)
+}
+
+// sessionEndedMessage is the sync log line for an account whose session ended.
+func sessionEndedMessage(label, reason string) string {
+	if reason == "" {
+		return label + ": the bank session has ended; renew the account to resume syncing"
+	}
+	return fmt.Sprintf("%s: the bank session has ended (%s); renew the account to resume syncing", label, reason)
 }
