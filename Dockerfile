@@ -1,4 +1,7 @@
-FROM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 
@@ -8,7 +11,8 @@ RUN go mod download
 COPY . .
 
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.Version=${VERSION}" -o /bankingsync .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags="-s -w -X main.Version=${VERSION}" -o /bankingsync .
 
 FROM alpine:3 AS runtime
 
@@ -20,10 +24,14 @@ WORKDIR /app
 
 COPY --from=builder /bankingsync /app/bankingsync
 
-FROM runtime AS sbom
+FROM --platform=$BUILDPLATFORM anchore/syft:latest AS syft
 
-COPY --from=anchore/syft:latest /syft /usr/local/bin/syft
-RUN syft dir:/ --select-catalogers "apk,go" --exclude './usr/local/bin/**' -o cyclonedx-json=/app/sbom.cdx.json
+FROM --platform=$BUILDPLATFORM alpine:3 AS sbom
+
+COPY --from=syft /syft /usr/local/bin/syft
+COPY --from=runtime / /target-rootfs
+RUN mkdir -p /app \
+    && syft dir:/target-rootfs --select-catalogers "apk,go" -o cyclonedx-json=/app/sbom.cdx.json
 
 FROM runtime
 
