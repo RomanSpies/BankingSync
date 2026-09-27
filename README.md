@@ -115,6 +115,8 @@ openssl rsa -in private.pem -pubout -out public.pem
 
 ### 3. Start bankingsync
 
+The image is published for `linux/amd64` and `linux/arm64`, so it runs on a Raspberry Pi 3, 4 or 5 with a 64-bit OS as well as on ARM servers; Docker picks the right one on pull. 32-bit ARM is not built.
+
 Create a `docker-compose.yml`. bankingsync waits for Actual Budget to be healthy before starting its first sync:
 
 ```yaml
