@@ -94,6 +94,10 @@ go-vet:
     # harness could stop compiling and nothing would notice until the expensive
     # integration job ran.
     - go vet -tags fireflylive ./...
+    # The release image is also built for arm64, but only on main. Vetting for
+    # arm64 compiles every package and test for it, so an architecture-specific
+    # break shows up in the merge request instead of after the merge.
+    - GOOS=linux GOARCH=arm64 go vet ./...
 
 staticcheck:
   stage: sast
@@ -312,12 +316,21 @@ docker-build-push:
     - echo "$DOCKER_HUB_TOKEN" | docker login -u "$DOCKER_HUB_USER" --password-stdin
     - docker buildx create --driver docker-container --use --name ci-builder 2>/dev/null || docker buildx use ci-builder
     - docker buildx build
+        --platform linux/amd64,linux/arm64
         --sbom=true
         --push
         --build-arg VERSION="$VERSION"
         -t "$DOCKER_HUB_USER/bankingsync:$VERSION"
         -t "$DOCKER_HUB_USER/bankingsync:latest"
         .
+    # Reads the pushed manifest list only; nothing is pulled or emulated.
+    - |
+      manifest=$(docker buildx imagetools inspect "$DOCKER_HUB_USER/bankingsync:$VERSION")
+      echo "$manifest"
+      for platform in linux/amd64 linux/arm64; do
+        echo "$manifest" | grep -Eq "Platform:[[:space:]]+$platform(/v[0-9]+)?\$" \
+          || { echo "manifest for $VERSION lacks $platform"; exit 1; }
+      done
     - docker logout
     - git tag "$VERSION" "$CI_COMMIT_SHA" 2>/dev/null || true
     - git push "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "$VERSION" 2>/dev/null || true
