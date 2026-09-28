@@ -27,7 +27,7 @@ bankingsync connects to your bank via PSD2 open banking and imports transactions
 - **Built-in deduplication** — transaction references are persisted per bank account, and a proximity match catches transactions whose reference, amount or payee changes between the pending and booked stage (hotel and fuel pre-authorisations, card scheme prefixes)
 - **Rules run automatically** — categorisation and payee rules are applied to newly imported transactions. With Actual, bankingsync evaluates them itself and supports category, payee, notes and cleared. With Firefly III, its own rule engine runs server-side on booked transactions
 - **Email notifications** — get alerted on sync failures and before a bank session needs to be re-authorised, with a test email button to verify your setup
-- **TLS out of the box** — a self-signed certificate is generated on first start so the web UI is always served over HTTPS
+- **TLS out of the box** — a self-signed certificate is generated on first start so the web UI is served over HTTPS by default (optional, can be disabled for development or behind a proxy)
 - **Full observability** — ship OpenTelemetry metrics and traces to your collector, and continuous profiling data to Grafana Pyroscope
 - **Supply chain transparency** — every container image ships with a CycloneDX SBOM (Go modules + OS packages) viewable in the web UI, downloadable as JSON, and attached as a BuildKit attestation on Docker Hub
 - **Minimal footprint** — single Go binary, single Docker container, SQLite for storage, zero runtime dependencies
@@ -206,6 +206,24 @@ control there is.
   `TRUSTED_PROXY=true` is set. Only enable it when a reverse proxy you control
   sets those headers, otherwise a client can choose the URL that appears in
   session-expiry emails.
+
+### HTTPS Configuration
+
+By default, bankingsync serves over HTTPS (port 8443) with a self-signed certificate. To disable HTTPS and use plain HTTP instead:
+
+```yaml
+environment:
+  HTTPS_ENABLED: "false"
+```
+
+When disabled:
+- bankingsync listens on port 8443 (HTTP)
+- No TLS certificate is generated or loaded
+- The web UI is accessed via `http://localhost:8443`
+
+**Only disable HTTPS for development or when bankingsync is behind a reverse proxy that handles TLS.** Running over plain HTTP exposes credentials and financial data to network eavesdropping.
+
+Behind a reverse proxy, also set `TRUSTED_PROXY: "true"` and have the proxy send `X-Forwarded-Proto` and `X-Forwarded-Host`. bankingsync builds the Enable Banking redirect URL and the links in session-expiry emails from the request; without those headers it sees a plain-HTTP request to its internal address, that redirect URL is not among the ones registered for your Enable Banking application, and Enable Banking refuses the authorisation with `REDIRECT_URI_NOT_ALLOWED`.
 
 ### Secrets at rest
 
@@ -906,6 +924,7 @@ different habits share one tolerance and one pair of thresholds.
 | `FIREFLY_FIRE_WEBHOOKS` | No | `false` | Fire Firefly webhooks on import. Off by default so a backfill does not emit hundreds of events |
 | `FIREFLY_INSECURE_TLS` | No | `false` | Skip TLS certificate verification when connecting to Firefly III |
 | `ACCOUNT_HOLDER_NAME` | No | — | Your name(s) as they appear on transactions, comma-separated. Suppresses self-transfers from appearing as payees. |
+| `HTTPS_ENABLED` | No | `true` | Enable HTTPS for the web UI. Set to `false` to run over plain HTTP on port 8443 (development only, or behind a reverse proxy) |
 | `WEB_ADDR` | No | `:8443` | Web UI listen address |
 | `TRUSTED_PROXY` | No | `false` | Honour `X-Forwarded-Proto` / `X-Forwarded-Host`. Only enable behind a reverse proxy you control — see [Security](#security) |
 | `EB_DUMP_RESPONSES` | No | — | Debug only: directory to write raw Enable Banking responses to. Contains real financial data — see `enablebanking/testdata/README.md` |

@@ -117,3 +117,28 @@ func TestSanitiseHeader_leavesPlainTextAlone(t *testing.T) {
 		t.Errorf("got %q, want %q", got, in)
 	}
 }
+
+func TestEnvBool_absentOrEmptyKeepsTheDefault(t *testing.T) {
+	for _, def := range []bool{true, false} {
+		if got := envBool("TEST_ENVBOOL_ABSENT_XYZ123", def); got != def {
+			t.Errorf("unset: got %v, want the default %v", got, def)
+		}
+		t.Setenv("TEST_ENVBOOL_EMPTY", "")
+		if got := envBool("TEST_ENVBOOL_EMPTY", def); got != def {
+			t.Errorf("empty: got %v, want the default %v", got, def)
+		}
+	}
+}
+
+func TestEnvBool_onlyTheFourOffWordsTurnItOff(t *testing.T) {
+	for value, want := range map[string]bool{
+		"false": false, "FALSE": false, " off ": false, "0": false, "no": false, "Off": false,
+		"true": true, "1": true, "yes": true, "on": true,
+		"flase": true, "disabled": true,
+	} {
+		t.Setenv("TEST_ENVBOOL_VALUE", value)
+		if got := envBool("TEST_ENVBOOL_VALUE", !want); got != want {
+			t.Errorf("envBool(%q) = %v, want %v; a typo must never switch HTTPS off", value, got, want)
+		}
+	}
+}
