@@ -221,7 +221,9 @@ When disabled:
 - No TLS certificate is generated or loaded
 - The web UI is accessed via `http://localhost:8443`
 
-⚠️ **Only disable HTTPS for development or when bankingsync is behind a reverse proxy that handles TLS.** Running over plain HTTP exposes credentials and financial data to network eavesdropping.
+**Only disable HTTPS for development or when bankingsync is behind a reverse proxy that handles TLS.** Running over plain HTTP exposes credentials and financial data to network eavesdropping.
+
+Behind a reverse proxy, also set `TRUSTED_PROXY: "true"` and have the proxy send `X-Forwarded-Proto` and `X-Forwarded-Host`. bankingsync builds the Enable Banking redirect URL and the links in session-expiry emails from the request; without those headers it sees a plain-HTTP request to its internal address, that redirect URL is not among the ones registered for your Enable Banking application, and Enable Banking refuses the authorisation with `REDIRECT_URI_NOT_ALLOWED`.
 
 ### Secrets at rest
 

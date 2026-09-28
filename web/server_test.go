@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -871,12 +872,22 @@ func TestDetectBaseURL_fallbackToStored(t *testing.T) {
 	}
 }
 
-func TestDetectBaseURL_fallbackToLocalhost(t *testing.T) {
-	st := openTestStore(t)
-	req, _ := http.NewRequest(http.MethodGet, "/", nil)
-	got := detectBaseURL(req, st)
-	if got != "https://localhost:8443" {
-		t.Errorf("got %q, want https://localhost:8443", got)
+func TestDetectBaseURL_fallbackToLocalhostKeepsTheRequestScheme(t *testing.T) {
+	for name, tc := range map[string]struct {
+		tls  *tls.ConnectionState
+		want string
+	}{
+		"served over TLS":   {&tls.ConnectionState{}, "https://localhost:8443"},
+		"served over plain": {nil, "http://localhost:8443"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			st := openTestStore(t)
+			req, _ := http.NewRequest(http.MethodGet, "/", nil)
+			req.TLS = tc.tls
+			if got := detectBaseURL(req, st); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

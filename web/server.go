@@ -1412,7 +1412,7 @@ func detectBaseURL(r *http.Request, st *store.Store) string {
 	if stored, _ := st.GetSetting("eb_base_url"); stored != "" {
 		return stored
 	}
-	return "https://localhost:8443"
+	return scheme + "://localhost:8443"
 }
 
 func isValidHost(host string) bool {
