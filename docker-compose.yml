@@ -43,6 +43,11 @@ services:
       ACCOUNT_HOLDER_NAME: "YourName YourSurname, YourSurname YourName"
       ACTUAL_INSECURE_TLS: "false"
 
+      # --- Optional: Disable HTTPS (default: true/enabled) ---
+      # Set to "false" to run over plain HTTP on port 8443.
+      # Only use for development or behind a reverse proxy that handles TLS.
+      # HTTPS_ENABLED: "false"
+
       # --- Firefly III instead of Actual Budget ---
       # Replace ACTUAL_URL / ACTUAL_PASSWORD / ACTUAL_SYNC_ID with these, and
       # drop the depends_on entry for the actual service further up.
