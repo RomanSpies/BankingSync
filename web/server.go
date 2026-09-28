@@ -226,16 +226,31 @@ func (s *Server) SetBackendStatus(fn func() BackendStatus) {
 // Mux returns the underlying ServeMux so callers can register additional routes.
 func (s *Server) Mux() *http.ServeMux { return s.mux }
 
-// StartTLS begins listening with TLS using the provided cert and key files.
-// It blocks until the server stops.
-func (s *Server) StartTLS(addr, certFile, keyFile string) error {
+// ConfigureServer builds the underlying http.Server bound to addr, ready for
+// Start or StartTLS to begin listening on it.
+func (s *Server) ConfigureServer(addr string) {
 	s.srv = &http.Server{
 		Addr:              addr,
 		Handler:           traceMiddleware(sameOriginMiddleware(s.mux)),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Printf("Web UI → https://localhost%s", addr)
+}
+
+// StartTLS begins listening with TLS using the provided cert and key files.
+// It blocks until the server stops.
+func (s *Server) StartTLS(certFile, keyFile string) error {
+	log.Printf("Web UI → https://localhost%s", s.srv.Addr)
 	if err := s.srv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
+		return err
+	}
+	return nil
+}
+
+// Start begins listening on address.
+// It blocks until the server stops.
+func (s *Server) Start() error {
+	log.Printf("Web UI → http://localhost%s", s.srv.Addr)
+	if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
 	return nil

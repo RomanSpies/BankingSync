@@ -102,15 +102,22 @@ func main() {
 
 	shutdown := initTelemetry(s)
 	webSrv.InitTelemetry()
+	webSrv.ConfigureServer(envOr("WEB_ADDR", ":8443"))
 	defer shutdown()
 
-	certFile, keyFile, err := ensureTLSCert()
-	if err != nil {
-		log.Fatalf("TLS cert: %v", err)
+	var listener func() error
+	if s.httpsEnabled {
+		certFile, keyFile, err := ensureTLSCert()
+		if err != nil {
+			log.Fatalf("TLS cert: %v", err)
+		}
+		listener = func() error { return webSrv.StartTLS(certFile, keyFile) }
+	} else {
+		listener = webSrv.Start
 	}
 
 	go func() {
-		if err := webSrv.StartTLS(envOr("WEB_ADDR", ":8443"), certFile, keyFile); err != nil {
+		if err := listener(); err != nil {
 			log.Printf("Web server: %v", err)
 		}
 	}()
@@ -175,6 +182,8 @@ type Syncer struct {
 	checkUpdate func(context.Context, *store.Store)
 
 	connectBackend func(context.Context) (budget.Store, error)
+
+	httpsEnabled bool
 }
 
 // gateSnapshot is what the promotion gate concluded the last time it was asked.
@@ -447,7 +456,10 @@ func (s *Syncer) webAddr() string {
 	if v, _ := s.st.GetSetting("eb_base_url"); v != "" {
 		return v
 	}
-	return "https://localhost:8443"
+	if s.httpsEnabled {
+		return "https://localhost:8443"
+	}
+	return "http://localhost:8443"
 }
 
 func (s *Syncer) baseContext() context.Context {
@@ -577,6 +589,7 @@ func newSyncer() (*Syncer, error) {
 		eb:             eb,
 		checkUpdate:    checkForUpdate,
 		connectBackend: dialBackend,
+		httpsEnabled:   envBool("HTTPS_ENABLED", true),
 	}, nil
 }
 
@@ -1567,6 +1580,21 @@ func envInt(key string, def int) int {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
+		}
+	}
+	return def
+}
+
+// envBool returns the boolean value of key, or def if the variable is unset.
+// It treats "false", "0", "no", "off" (case-insensitive) as false, everything
+// else as true.
+func envBool(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "false", "0", "no", "off":
+			return false
+		default:
+			return true
 		}
 	}
 	return def
