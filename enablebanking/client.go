@@ -46,6 +46,7 @@ type Transaction struct {
 	AmountCents   int64
 	Currency      string
 	Payee         string
+	KeyPayee      string
 	Notes         string
 	EntryRef      string
 	TransactionID string
@@ -284,7 +285,6 @@ func (c *Client) parseTransaction(t map[string]any) (Transaction, error) {
 	if err != nil {
 		return Transaction{}, fmt.Errorf("parseAmount: %w", err)
 	}
-	payee := c.parsePayee(t)
 	notes, sepa := parseNotesAndSEPA(t)
 	ref := getEntryRef(t)
 	status, _ := t["status"].(string)
@@ -300,7 +300,8 @@ func (c *Client) parseTransaction(t map[string]any) (Transaction, error) {
 		Date:             date,
 		AmountCents:      amountCents,
 		Currency:         parseCurrency(t),
-		Payee:            payee,
+		Payee:            c.parsePayee(t),
+		KeyPayee:         c.parseKeyPayee(t),
 		Notes:            notes,
 		EntryRef:         ref,
 		TransactionID:    transactionID(t),
@@ -403,35 +404,42 @@ func transactionIsDebit(t map[string]any) bool {
 }
 
 func (c *Client) parsePayee(t map[string]any) string {
-	var name string
-	if transactionIsDebit(t) {
+	return c.payee(t, stripSEPAPrefixes)
+}
 
-		if cred, ok := t["creditor"].(map[string]any); ok {
-			name, _ = cred["name"].(string)
-		}
-		if name == "" {
-			name, _ = t["creditor_name"].(string)
-		}
+func (c *Client) parseKeyPayee(t map[string]any) string {
+	return c.payee(t, stripSEPATags)
+}
 
-		if name == "" {
-			name = firstRemittanceLine(t)
-		}
-	} else {
-
-		if deb, ok := t["debtor"].(map[string]any); ok {
-			name, _ = deb["name"].(string)
-		}
-		if name == "" {
-			name, _ = t["debtor_name"].(string)
-		}
-
-		if name == "" || c.isOwnName(name) {
-			name = firstRemittanceLine(t)
-		}
+func (c *Client) payee(t map[string]any, clean func(string) string) string {
+	name := c.counterpartyName(t)
+	if name == "" {
+		name = clean(firstRemittanceLine(t))
 	}
 	if name == "" {
 		return "Unknown"
 	}
+	return name
+}
+
+func (c *Client) counterpartyName(t map[string]any) string {
+	if transactionIsDebit(t) {
+		return partyName(t, "creditor")
+	}
+	name := partyName(t, "debtor")
+	if c.isOwnName(name) {
+		return ""
+	}
+	return name
+}
+
+func partyName(t map[string]any, side string) string {
+	if party, ok := t[side].(map[string]any); ok {
+		if name, _ := party["name"].(string); name != "" {
+			return name
+		}
+	}
+	name, _ := t[side+"_name"].(string)
 	return name
 }
 
@@ -531,10 +539,10 @@ func firstRemittanceLine(t map[string]any) string {
 	case []any:
 		if len(v) > 0 {
 			s, _ := v[0].(string)
-			return stripSEPAPrefixes(s)
+			return s
 		}
 	case string:
-		return stripSEPAPrefixes(v)
+		return v
 	}
 	return ""
 }

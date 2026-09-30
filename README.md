@@ -274,7 +274,7 @@ Tested against Firefly III **v6.6.6**. Check the sync history after upgrading.
 | **Rules** | bankingsync evaluates them itself, immediately, on exactly the transactions it touched | Firefly's own engine runs server-side, only on **booked** transactions. Pending ones are deliberately excluded, because a rule could strip the pending tag before the booking ever confirms it |
 | **Pending** | the `cleared` flag | a tag (`pending` by default). The tag is a display aid, not the source of truth — deleting it does not stop the transaction from being confirmed |
 | **Manual entries** | a manually entered transaction is adopted by the bank import | adopted too, **unless** it already carries an `external_id` from another importer. Then a second transaction is created rather than overwriting someone else's record |
-| **SEPA references** | not stored | `EREF`, `MREF` and `CRED` are written to `sepa_ct_id`, `sepa_db` and `sepa_ci` |
+| **SEPA references** | not stored | `EREF`, `MREF` and `CRED` are written to `sepa_ct_id`, `sepa_db` and `sepa_ci`; ING's `mandatereference:`/`creditorid:` labels count as `MREF`/`CRED` |
 | **Own transfers** | imported as a payment to a payee | when the counterparty IBAN belongs to another of your asset accounts, imported as a real `transfer` |
 | **Account matching** | by name | by IBAN first, name only as a fallback. Firefly keeps asset IBANs unique per user, so **renaming an account in Firefly is safe** — the next sync finds it again by IBAN. Under Actual the name is the only handle, so a rename has to be mirrored in the web UI |
 | **Split transactions** | untouched | if you split one of our transactions, bankingsync stops updating it rather than deleting your splits |

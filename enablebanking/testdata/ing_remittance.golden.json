@@ -1,0 +1,62 @@
+[
+  {
+    "status": "BOOK",
+    "date": "2026-09-02",
+    "amount_cents": -2317,
+    "currency": "EUR",
+    "payee": "VISA SUPERMARKT NORD",
+    "notes": "VISA SUPERMARKT NORD 2026-08-31 KARTE 1234",
+    "entry_ref": "ref-0000a1b2c3d4",
+    "ref_source": "entry_reference",
+    "content_key": "2026-09-02|25aae80474359222",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  },
+  {
+    "status": "BOOK",
+    "date": "2026-09-03",
+    "amount_cents": -3990,
+    "currency": "EUR",
+    "payee": "Sportverein Beispielstadt",
+    "notes": "Beitrag Oktober 2026",
+    "entry_ref": "ref-0000b2c3d4e5",
+    "ref_source": "entry_reference",
+    "content_key": "2026-09-03|969df9ee1caa9458",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "SV-2019-0042",
+    "sepa_creditor_id": "DE98ZZZ09999999999"
+  },
+  {
+    "status": "BOOK",
+    "date": "2026-09-04",
+    "amount_cents": -5499,
+    "currency": "EUR",
+    "payee": "PayPal Europe",
+    "notes": "PP.1234.PP . Beispielshop, Ihr Einkauf bei Beispielshop",
+    "entry_ref": "ref-0000c3d4e5f6",
+    "ref_source": "entry_reference",
+    "content_key": "2026-09-04|e90107b4a30ab5b7",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "5ZXJ22BNKQ7PL",
+    "sepa_creditor_id": "LU96ZZZ0000000000000000058"
+  },
+  {
+    "status": "BOOK",
+    "date": "2026-09-05",
+    "amount_cents": 50000,
+    "currency": "EUR",
+    "payee": "Umbuchung Extra-Konto",
+    "notes": "Umbuchung Extra-Konto",
+    "entry_ref": "ref-0000d4e5f6a7",
+    "ref_source": "entry_reference",
+    "content_key": "2026-09-05|99f846999596417a",
+    "counterparty_iban": "",
+    "sepa_end_to_end": "",
+    "sepa_mandate": "",
+    "sepa_creditor_id": ""
+  }
+]

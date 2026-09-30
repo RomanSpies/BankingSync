@@ -292,7 +292,7 @@ func importKeys(txns []enablebanking.Transaction, prefixes []string) (keys []str
 		}
 
 		base := fmt.Sprintf("%s|%s|%s", t.Date.Format("2006-01-02"),
-			centsToDecimal(t.AmountCents), keyPayee(t.Payee, prefixes))
+			centsToDecimal(t.AmountCents), keyPayee(t.KeyPayee, prefixes))
 		// Counted per status but not keyed by it. Counting them together would
 		// hand a booking the index after its own authorisation; keying by status
 		// would stop the two ever meeting in the pending map, which is what lets
@@ -1738,8 +1738,8 @@ func lessTxn(a, b enablebanking.Transaction) bool {
 	if a.AmountCents != b.AmountCents {
 		return a.AmountCents < b.AmountCents
 	}
-	if a.Payee != b.Payee {
-		return a.Payee < b.Payee
+	if a.KeyPayee != b.KeyPayee {
+		return a.KeyPayee < b.KeyPayee
 	}
 	return a.EntryRef < b.EntryRef
 }

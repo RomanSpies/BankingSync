@@ -4549,7 +4549,7 @@ func mustDay(t *testing.T, s string) time.Time {
 func txnFor(status, ref, date, payee string, cents int64) enablebanking.Transaction {
 	return enablebanking.Transaction{
 		Status: status, EntryRef: ref, Date: mustDay(nil, date),
-		AmountCents: cents, Payee: payee,
+		AmountCents: cents, Payee: payee, KeyPayee: payee,
 	}
 }
 

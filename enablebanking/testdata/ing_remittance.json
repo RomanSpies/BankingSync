@@ -1,0 +1,41 @@
+{
+  "transactions": [
+    {
+      "entry_reference": "ref-0000a1b2c3d4",
+      "booking_date": "2026-09-02",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "amount": "23.17", "currency": "EUR" },
+      "creditor": { "name": "VISA SUPERMARKT NORD" },
+      "remittance_information": ["mandatereference:,creditorid:,remittanceinformation:VISA SUPERMARKT NORD 2026-08-31 KARTE 1234"]
+    },
+    {
+      "entry_reference": "ref-0000b2c3d4e5",
+      "booking_date": "2026-09-03",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "amount": "39.90", "currency": "EUR" },
+      "creditor": { "name": "Sportverein Beispielstadt" },
+      "remittance_information": ["mandatereference:SV-2019-0042,creditorid:DE98ZZZ09999999999,remittanceinformation:Beitrag Oktober 2026"]
+    },
+    {
+      "entry_reference": "ref-0000c3d4e5f6",
+      "booking_date": "2026-09-04",
+      "status": "BOOK",
+      "credit_debit_indicator": "DBIT",
+      "transaction_amount": { "amount": "54.99", "currency": "EUR" },
+      "creditor": { "name": "PayPal Europe" },
+      "remittance_information": ["mandatereference:5ZXJ22BNKQ7PL,creditorid:LU96ZZZ0000000000000000058,remittanceinformation:PP.1234.PP . Beispielshop, Ihr Einkauf bei Beispielshop"]
+    },
+    {
+      "entry_reference": "ref-0000d4e5f6a7",
+      "booking_date": "2026-09-05",
+      "status": "BOOK",
+      "credit_debit_indicator": "CRDT",
+      "transaction_amount": { "amount": "500.00", "currency": "EUR" },
+      "debtor": { "name": null },
+      "remittance_information": ["mandatereference:,creditorid:,remittanceinformation:Umbuchung Extra-Konto"]
+    }
+  ],
+  "continuation_key": ""
+}
