@@ -865,6 +865,8 @@ func (s *Syncer) run() bool {
 	// again, and a decision past it describes one nobody can check any more.
 	if err := s.st.PruneMatchReviews(); err != nil {
 		log.Printf("Prune match reviews: %v", err)
+	} else if err := s.state.ReloadHeld(s.st); err != nil {
+		log.Printf("Reload held transactions: %v", err)
 	}
 	if err := s.st.PruneMatchDecisions(); err != nil {
 		log.Printf("Prune match decisions: %v", err)

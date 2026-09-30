@@ -315,3 +315,30 @@ func TestReviewQueue_aHeldAuthorisationDoesNotOfferARowAlreadyBooked(t *testing.
 		}
 	})
 }
+
+func TestSync_pruningTheReviewQueueReleasesItsHeldKeys(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		acct := h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(2))
+		if err := h.st.AddMatchReview(store.MatchReview{
+			BankAccountID: acct, PendingKey: "old|1.00|x|1", TxnDate: daysAgo(store.RetentionDays + 5),
+			AmountCents: -100, Currency: "EUR", Payee: "Old",
+		}); err != nil {
+			t.Fatalf("AddMatchReview: %v", err)
+		}
+		h.reloadState(t)
+		if !h.syncer.state.Held(acct)["old|1.00|x|1"] {
+			t.Fatal("setup: the old review is not held")
+		}
+
+		h.eb.setPages([][]map[string]any{{}})
+		h.syncer.run()
+
+		if n, _ := h.st.CountMatchReviews(); n != 0 {
+			t.Fatalf("setup: %d reviews survived pruning", n)
+		}
+		if held := h.syncer.state.Held(acct); len(held) != 0 {
+			t.Fatalf("held keys %v outlived the reviews they stood for; opening balance and drift stay deferred until a restart", held)
+		}
+	})
+}

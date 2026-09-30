@@ -314,3 +314,12 @@ func (s *State) PruneBookedRows(st *store.Store) error {
 	s.BookedRows = updated
 	return nil
 }
+
+func (s *State) ReloadHeld(st *store.Store) error {
+	held, err := st.AllHeldKeys()
+	if err != nil {
+		return err
+	}
+	s.HeldKeys = held
+	return nil
+}
