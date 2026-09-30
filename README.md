@@ -507,6 +507,27 @@ means without changing a figure on it — and the "this is new" answer never had
 figure to check in the first place. Both are refused when the settings have moved
 since the page was drawn.
 
+**A held authorisation still counts as a candidate for its booking.** Holding a
+transaction keeps it out of the budget, and the budget is where candidates come
+from, so for a long time an authorisation held on the Monday and its booking
+arriving the following Monday could never meet: each was listed with the other
+rows of the same shop and neither with the other. Fellegi and Sunter hold a
+*pair* for review, not a record, and a record held back has not left the pool.
+So a booking is now weighed against the authorisations waiting in the queue as
+well, within the usual window:
+
+- if the pairing clears the automatic threshold, the booking settles the held
+  authorisation on its own — one row is written for the two, dated like the
+  authorisation, and the authorisation leaves the queue
+  (`match_reviews_total{outcome="settled_by_booking", reason="automatic"}`);
+- otherwise the booking is held too, and its review lists the waiting
+  authorisation among its candidates, marked *also waiting for review*.
+  Choosing it writes one row for both and answers both questions. The
+  authorisation's own review says that its booking is waiting.
+
+Only a booking settles an authorisation, so an authorisation is never offered
+another held authorisation, and a held booking is never offered to anything.
+
 Because a held transaction is money in no budget, it is visible in five places:
 the dashboard, `/review`, `/health` (`degraded` while anything is open), the
 `bankingsync_match_reviews_open` gauge, and one email per run that held
