@@ -227,7 +227,7 @@ and a dashboard should say so in a panel description rather than imply freshness
 | `bankingsync_near_miss_total` | counter | `bank`, `backend`, `reason` | Transactions created although an open row nearly matched. |
 | `bankingsync_listed_pending_twins_total` | counter | `bank` | Bookings kept apart from an authorisation of the same key because the bank still lists that authorisation as pending in the same feed. A bank that briefly lists both halves of one purchase shows up here as a steady rate, and each tick is an uncleared twin left in the budget. |
 | `bankingsync_booking_identity_changed_total` | counter | `bank` | Bookings that adopted a row already booked for a different bank record. Either the bank changed a record between two deliveries while it was still in the fetch window — the probabilistic fallback then settled it onto its own row, correctly — or a genuine twin was absorbed. A rate above zero is the measurement of how stable a bank's booked records really are. |
-| `bankingsync_reference_source_total` | counter | `bank`, `status`, `source` | Fetched transactions by the field their bank reference was taken from. Counted per fetched record per run, so a re-delivered transaction counts again; the ratio between sources is what matters. |
+| `bankingsync_reference_source_total` | counter | `bank`, `status`, `source` | Fetched transactions by the identifier the bank supplied: `entry_reference` if present, else `transaction_id`, else none. Only `entry_reference` is used as a reference; a bank counted under `transaction_id` is matched by content. Counted per fetched record per run, so a re-delivered transaction counts again; the ratio between sources is what matters. |
 
 Label values:
 
@@ -246,8 +246,9 @@ Label values:
 - `agreement` ∈ `same`, `different`.
 - `source` on `reference_source_total` ∈ `entry_reference`, `transaction_id`,
   `none`. `transaction_id` is the one to watch: Enable Banking documents it as
-  liable to change when the list is retrieved again, so a bank whose references
-  come from it has no stable identity for its transactions.
+  liable to change when the list is retrieved again, so it is never used as a
+  reference, and a bank that supplies nothing better is identified by the content
+  of its booked records instead.
 - `reason` on `near_miss_total` ∈ `ambiguous`, `payee`, `amount`, `date`,
   `booked` (an authorisation created beside a row bankingsync had already booked,
   which it would otherwise have adopted), `booked_twin` (a booking created beside

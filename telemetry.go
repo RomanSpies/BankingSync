@@ -228,7 +228,7 @@ func newSyncMetrics(meter metric.Meter) *syncMetrics {
 	nearMiss, _ := meter.Int64Counter("bankingsync_near_miss_total",
 		metric.WithDescription("Transactions created although an open row in the window nearly matched"))
 	refSource, _ := meter.Int64Counter("bankingsync_reference_source_total",
-		metric.WithDescription("Fetched transactions by the field their bank reference came from"))
+		metric.WithDescription("Fetched transactions by the identifier their bank supplied"))
 	listedPendingTwins, _ := meter.Int64Counter("bankingsync_listed_pending_twins_total",
 		metric.WithDescription("Bookings kept apart from a same-key authorisation the bank still lists as pending"))
 	identityChanged, _ := meter.Int64Counter("bankingsync_booking_identity_changed_total",
