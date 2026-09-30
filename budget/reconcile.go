@@ -691,6 +691,8 @@ type Policy struct {
 	OnNearMiss func(reason string, candidate *Transaction)
 
 	Booked func(txnID string) bool
+
+	Sealed func(txnID, identity string) bool
 }
 
 // withinTolerance reports whether booked may be treated as the settled form of
@@ -744,10 +746,14 @@ func (p Policy) alreadyBooked(c *Transaction, in ImportedFields) bool {
 	return !in.Cleared && p.Booked != nil && p.Booked(c.ID)
 }
 
+func (p Policy) sealed(c *Transaction, in ImportedFields) bool {
+	return in.Cleared && in.ExternalRef == "" && in.Identity != "" && p.Sealed != nil && p.Sealed(c.ID, in.Identity)
+}
+
 func (p Policy) bookedTwins(candidates []*Transaction, in ImportedFields) []*Transaction {
 	var out []*Transaction
 	for _, c := range candidates {
-		if p.alreadyBooked(c, in) && adoptable(c, in.ExternalRef) {
+		if (p.alreadyBooked(c, in) || p.sealed(c, in)) && adoptable(c, in.ExternalRef) {
 			out = append(out, c)
 		}
 	}
@@ -760,10 +766,16 @@ func (p Policy) reportBookedTwin(twins []*Transaction, in ImportedFields, taken 
 	}
 	unguarded := p
 	unguarded.Booked = nil
+	unguarded.Sealed = nil
 	scored := Assess(twins, in, taken, unguarded)
-	if len(scored) > 0 && scored[0].Probability >= p.autoProbability() {
-		p.OnNearMiss("booked", scored[0].Transaction)
+	if len(scored) == 0 || scored[0].Probability < p.autoProbability() {
+		return
 	}
+	reason := "booked"
+	if in.Cleared {
+		reason = "booked_twin"
+	}
+	p.OnNearMiss(reason, scored[0].Transaction)
 }
 
 func adoptable(c *Transaction, ref string) bool {
@@ -1059,7 +1071,7 @@ func Assess(candidates []*Transaction, in ImportedFields, alreadyMatched []*Tran
 		if !adoptable(c, in.ExternalRef) {
 			continue
 		}
-		if pol.alreadyBooked(c, in) {
+		if pol.alreadyBooked(c, in) || pol.sealed(c, in) {
 			continue
 		}
 		survivors = append(survivors, c)

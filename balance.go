@@ -472,6 +472,10 @@ func (s *Syncer) matchPolicy(label string) budget.Policy {
 
 func (s *Syncer) nearMiss(label, reason string, c *budget.Transaction) {
 	switch {
+	case reason == "booked_twin" && c != nil:
+		log.Printf("[%s] near miss (booked_twin): creating a booking although the row of %s "+
+			"dated %s it matches stands for another bank record the feed no longer delivers — a second purchase",
+			label, centsToDecimal(c.AmountCents), c.Date.Format("2006-01-02"))
 	case reason == "booked" && c != nil:
 		log.Printf("[%s] near miss (booked): creating an authorisation although the row of %s "+
 			"dated %s it matches was already booked — a stale authorisation, or a second purchase",

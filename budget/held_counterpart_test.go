@@ -213,3 +213,70 @@ func TestReconcileBatch_anAuthorisationCreatedBesideItsBookedTwinIsANearMiss(t *
 		t.Fatalf("near miss %q on %v; an authorisation created beside a booked twin must be counted", reason, row)
 	}
 }
+
+func sealedExcept(row, own string) func(string, string) bool {
+	return func(id, identity string) bool { return id == row && identity != own }
+}
+
+func bookingWithIdentity(d time.Time, cents int64, payee, identity string) ImportedFields {
+	in := imported(d, cents, payee, "")
+	in.Identity = identity
+	return in
+}
+
+func TestAssess_aBookingDoesNotAdoptARowSealedUnderAnotherRecord(t *testing.T) {
+	d := day(2026, time.September, 30)
+	row := &Transaction{ID: "r1", AccountID: "a1", Date: d, AmountCents: -350, PayeeName: "Cafe Sonne", Cleared: true}
+	pol := heldPolicy()
+	pol.Sealed = sealedExcept("r1", "monday")
+
+	if got := Assess([]*Transaction{row}, bookingWithIdentity(d.AddDate(0, 0, 2), -350, "Cafe Sonne", "wednesday"), nil, pol); len(got) != 0 {
+		t.Fatal("a second purchase was offered the row of the first, whose record the feed can no longer deliver")
+	}
+}
+
+func TestAssess_aBookingWithoutIdentityStillAdoptsASealedRow(t *testing.T) {
+	d := day(2026, time.September, 30)
+	row := &Transaction{ID: "r1", AccountID: "a1", Date: d, AmountCents: -350, PayeeName: "Cafe Sonne", Cleared: true}
+	pol := heldPolicy()
+	pol.Sealed = sealedExcept("r1", "monday")
+
+	if got := Assess([]*Transaction{row}, bookingWithIdentity(d, -350, "Cafe Sonne", ""), nil, pol); len(got) != 1 {
+		t.Fatal("a booking with no identity lost its candidate; without one there is nothing to tell it apart by")
+	}
+}
+
+func TestAssess_aReferencedBookingIsNotBoundByTheSealedRule(t *testing.T) {
+	d := day(2026, time.September, 30)
+	row := &Transaction{ID: "r1", AccountID: "a1", Date: d, AmountCents: -350, PayeeName: "Cafe Sonne", Cleared: true}
+	pol := heldPolicy()
+	pol.Sealed = sealedExcept("r1", "monday")
+	in := bookingWithIdentity(d, -350, "Cafe Sonne", "wednesday")
+	in.ExternalRef = "ref-1"
+
+	if got := Assess([]*Transaction{row}, in, nil, pol); len(got) != 1 {
+		t.Fatal("a booking the bank identifies by reference was bound by the content rule meant for banks that do not")
+	}
+}
+
+func TestReconcileBatch_aBookingCreatedBesideItsSealedTwinIsANearMiss(t *testing.T) {
+	d := day(2026, time.September, 30)
+	twin := &Transaction{ID: "r1", AccountID: "a1", Date: d, AmountCents: -350, PayeeName: "Cafe Sonne", Cleared: true}
+	s := &fakeStore{txns: []*Transaction{twin}}
+	pol := heldPolicy()
+	pol.Sealed = sealedExcept("r1", "monday")
+	var reason string
+	pol.OnNearMiss = func(r string, _ *Transaction) { reason = r }
+
+	out, err := ReconcileBatch(context.Background(), s, "a1",
+		[]ImportedFields{bookingWithIdentity(d.AddDate(0, 0, 2), -350, "Cafe Sonne", "wednesday")}, nil, nil, pol)
+	if err != nil {
+		t.Fatalf("ReconcileBatch: %v", err)
+	}
+	if !out[0].Created || len(s.updates) != 0 {
+		t.Fatalf("outcome %s, updates %d; the second purchase must be created and the first left alone", out[0].Name(), len(s.updates))
+	}
+	if reason != "booked_twin" {
+		t.Fatalf("near miss %q; a purchase created beside its sealed twin must be counted as booked_twin", reason)
+	}
+}

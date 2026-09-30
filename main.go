@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1087,6 +1088,7 @@ func (s *Syncer) run() bool {
 		pol := s.matchPolicy(label)
 		pol.PayeeFrequency = payeeFrequency(rawTxns, pol.PayeePrefixes)
 		pol.Booked = s.state.Booked(acct.ID)
+		pol.Sealed = s.state.Sealed(acct.ID, dateFrom)
 
 		lo, hi := candidateWindow(dateFrom, rawTxns)
 		existing, err := s.ac.ListTransactions(ctx, account.ID, lo, hi)
@@ -1955,6 +1957,9 @@ func (s *Syncer) settle(
 
 	default:
 		rememberRef()
+		if !wasCreated {
+			s.countIdentityChanged(ctx, label, acct, w.fields.Identity, t.ID)
+		}
 		s.recordIdentity(ctx, label, acct, w.fields.Identity, t.ID, w.ref)
 		if wasCreated {
 			s.recordBooked(ctx, label, acct, t.ID, "", w.ref)
@@ -2008,6 +2013,17 @@ func (s *Syncer) recordIdentity(ctx context.Context, label string, acct store.Ba
 	}
 	if err := s.state.RecordIdentity(acct.ID, identity, txnID, s.st); err != nil {
 		bookkeepingFailed(ctx, "RecordIdentity", label, ref, err)
+	}
+}
+
+func (s *Syncer) countIdentityChanged(ctx context.Context, label string, acct store.BankAccount, identity, txnID string) {
+	known := s.state.IdentitiesOf(acct.ID, txnID)
+	if identity == "" || len(known) == 0 || slices.Contains(known, identity) {
+		return
+	}
+	log.Printf("[%s] Booking adopted row %s, which was booked for a different bank record — the record changed, or a twin was absorbed", label, txnID)
+	if s.met != nil && s.met.identityChanged != nil {
+		s.met.identityChanged.Add(ctx, 1, metric.WithAttributes(attribute.String("bank", label)))
 	}
 }
 

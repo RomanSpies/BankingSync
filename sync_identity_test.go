@@ -235,3 +235,54 @@ func TestSync_twoIdenticalBookingsOnOneDayStayTwoAcrossRuns(t *testing.T) {
 		}
 	})
 }
+
+func TestSync_aSecondIdenticalPurchaseOnALaterDayIsNotAbsorbed(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(8))
+		h.reloadState(t)
+
+		h.eb.setPages([][]map[string]any{{bookedTxnPayee("", daysAgo(5), "3.50", "Cafe Sonne")}})
+		h.syncer.run()
+		h.eb.setPages([][]map[string]any{{bookedTxnPayee("", daysAgo(3), "3.50", "Cafe Sonne")}})
+		h.syncer.run()
+
+		txns := h.actualTxns(t)
+		if len(txns) != 2 {
+			t.Fatalf("%d rows; Wednesday's purchase was merged into Monday's and 3.50 went missing", len(txns))
+		}
+		for _, tx := range txns {
+			if !tx.Cleared {
+				t.Errorf("row %+v is not booked", tx)
+			}
+		}
+		if n, _ := h.st.CountMatchReviews(); n != 0 {
+			t.Fatalf("%d reviews, want none", n)
+		}
+	})
+}
+
+func TestSync_aDriftedRedeliveryWithinReachStillAdoptsItsOwnRow(t *testing.T) {
+	h := newHarness(t)
+	reader := withMetrics(t, h)
+	acct := h.addAccount(t, "")
+	_ = h.st.SetLastSyncDate(daysAgo(8))
+	h.reloadState(t)
+	monday := bookedTxnPayee("", daysAgo(5), "3.50", "Cafe Sonne")
+	h.eb.setPages([][]map[string]any{{monday}})
+	h.syncer.run()
+
+	drifted := bookedTxnPayee("", daysAgo(5), "3.50", "Cafe Sonne")
+	drifted["note"] = "enriched later by the bank"
+	_ = h.st.SetBankAccountLastSyncDate(acct, daysAgo(6))
+	h.reloadState(t)
+	h.eb.setPages([][]map[string]any{{drifted}})
+	h.syncer.run()
+
+	if n := len(h.actualTxns(t)); n != 1 {
+		t.Fatalf("%d rows; a record the bank changed while it was still in reach must settle onto its own row", n)
+	}
+	if got := collectBy(t, reader, "bankingsync_booking_identity_changed_total", "bank"); len(got) != 1 {
+		t.Fatalf("booking_identity_changed_total = %v; the drift must be counted", got)
+	}
+}

@@ -358,3 +358,37 @@ func (s *State) PruneBookingIdentities(st *store.Store) error {
 	s.Identities = updated
 	return nil
 }
+
+func (s *State) Sealed(bankAccountID int64, dateFrom time.Time) func(txnID, identity string) bool {
+	type record struct {
+		identities map[string]bool
+		reach      string
+	}
+	rows := map[string]*record{}
+	for identity, txnID := range s.Identities[bankAccountID] {
+		r := rows[txnID]
+		if r == nil {
+			r = &record{identities: map[string]bool{}}
+			rows[txnID] = r
+		}
+		r.identities[identity] = true
+		if reach, _, _ := strings.Cut(identity, "|"); reach > r.reach {
+			r.reach = reach
+		}
+	}
+	cutoff := dateFrom.Format("2006-01-02")
+	return func(txnID, identity string) bool {
+		r := rows[txnID]
+		return r != nil && !r.identities[identity] && r.reach < cutoff
+	}
+}
+
+func (s *State) IdentitiesOf(bankAccountID int64, txnID string) []string {
+	var out []string
+	for identity, id := range s.Identities[bankAccountID] {
+		if id == txnID {
+			out = append(out, identity)
+		}
+	}
+	return out
+}
