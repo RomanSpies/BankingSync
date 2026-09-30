@@ -50,6 +50,7 @@ func (s *Syncer) HeldTransactions(ctx context.Context) ([]web.ReviewItem, error)
 
 	version := s.matchPolicy("").Version()
 	out := make([]web.ReviewItem, 0, len(reviews))
+	awaited := map[int64]bool{}
 	for _, r := range reviews {
 		item := web.ReviewItem{
 			ID:           r.ID,
@@ -72,7 +73,7 @@ func (s *Syncer) HeldTransactions(ctx context.Context) ([]web.ReviewItem, error)
 		item.BankName = bankLabel(acct)
 		item.BudgetAccount = acct.ActualAccount
 
-		cands, _, _, err := s.heldCandidates(ctx, r, acct)
+		cands, _, _, err := s.heldCandidates(ctx, r, acct, reviews)
 		if err != nil {
 			item.Unavailable = err.Error()
 			out = append(out, item)
@@ -86,9 +87,16 @@ func (s *Syncer) HeldTransactions(ctx context.Context) ([]web.ReviewItem, error)
 				PayeeName: c.Transaction.PayeeName,
 				Percent:   percent(c.Probability),
 				Why:       explainComparison(c.Comparison, c.Transaction.Date, r.TxnDate),
+				Held:      c.Transaction.Provisional,
 			})
+			if id, ok := heldReviewID(c.Transaction.ID); ok {
+				awaited[id] = true
+			}
 		}
 		out = append(out, item)
+	}
+	for i := range out {
+		out[i].BookingWaiting = awaited[out[i].ID]
 	}
 	return out, nil
 }
@@ -157,7 +165,11 @@ func (s *Syncer) ResolveHeld(
 		return web.Refuse("the bank account this came from is no longer connected, " +
 			"so there is nothing to merge into")
 	}
-	cands, _, pol, err := s.heldCandidates(ctx, r, acct)
+	reviews, err := s.st.GetMatchReviews()
+	if err != nil {
+		return fmt.Errorf("read the review queue: %w", err)
+	}
+	cands, accountID, pol, err := s.heldCandidates(ctx, r, acct, reviews)
 	if err != nil {
 		return err
 	}
@@ -178,6 +190,10 @@ func (s *Syncer) ResolveHeld(
 	if got := percent(chosen.Probability); got != shownPercent {
 		return web.Refuse("the budget changed since this page was drawn: that match is now %d%%, "+
 			"not %d%%. Look at it again before deciding", got, shownPercent)
+	}
+
+	if chosen.Transaction.Provisional {
+		return s.settleHeldPair(ctx, r, acct, accountID, reviews, chosen, chosenWasBest, in)
 	}
 
 	if err := budget.Adopt(ctx, s.ac, chosen.Transaction, in, pol); err != nil {
@@ -225,7 +241,7 @@ func (s *Syncer) publish(ctx context.Context) error {
 // something that is not there; and on the Actual backend this listing call is
 // also what warms the in-process map that a later update depends on.
 func (s *Syncer) heldCandidates(
-	ctx context.Context, r store.MatchReview, acct store.BankAccount,
+	ctx context.Context, r store.MatchReview, acct store.BankAccount, reviews []store.MatchReview,
 ) ([]budget.Candidate, string, budget.Policy, error) {
 	pol := s.matchPolicy(bankLabel(acct))
 	pol.OnNearMiss = nil
@@ -247,7 +263,32 @@ func (s *Syncer) heldCandidates(
 	if err != nil {
 		return nil, "", pol, fmt.Errorf("read the budget: %w", err)
 	}
-	return budget.Assess(existing, in, nil, pol), accountID, pol, nil
+	held, _ := s.heldAuthorisations(reviews, acct)
+	return budget.Assess(budget.WithHeld(existing, held, in), in, nil, pol), accountID, pol, nil
+}
+
+func (s *Syncer) settleHeldPair(
+	ctx context.Context, r store.MatchReview, acct store.BankAccount, accountID string,
+	reviews []store.MatchReview, chosen *budget.Candidate, wasBest bool, in budget.ImportedFields,
+) error {
+	_, byID := s.heldAuthorisations(reviews, acct)
+	auth, ok := byID[chosen.Transaction.ID]
+	if !ok {
+		return web.Refuse("that authorisation is no longer waiting for review. Look at the list again")
+	}
+	t, err := s.ac.Create(ctx, accountID, budget.CounterpartFields(in, chosen.Transaction))
+	if err != nil {
+		return fmt.Errorf("import the transaction: %w", err)
+	}
+	if err := s.publish(ctx); err != nil {
+		return err
+	}
+	if err := s.retireCounterpart(ctx, acct, auth, t, true); err != nil {
+		return err
+	}
+	settled := *chosen
+	settled.Transaction = t
+	return s.releaseHeld(ctx, r, acct, t, false, &settled, wasBest)
 }
 
 func (s *Syncer) budgetAccountID(ctx context.Context, acct store.BankAccount) (string, error) {

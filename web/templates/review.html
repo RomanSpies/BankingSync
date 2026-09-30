@@ -81,6 +81,9 @@
 {{if .Unavailable}}
 <div class="alert alert-warn"><span>{{.Unavailable}}</span></div>
 {{end}}
+{{if .BookingWaiting}}
+<div class="alert alert-info"><span>Its booking is waiting in this queue too. Choose this authorisation on the booking and both are settled as one transaction.</span></div>
+{{end}}
 
 <form method="POST" action="/review/resolve">
   <input type="hidden" name="review_id" value="{{.ID}}">
@@ -98,6 +101,9 @@
         <span class="badge {{if ge .Percent 75}}badge-green{{else if ge .Percent 60}}badge-yellow{{else}}badge-red{{end}}">{{.Percent}}&#37;</span>
         {{.Why}}
       </div>
+      {{if .Held}}
+      <div style="font-size:.75rem;color:var(--muted);margin-top:.15rem">Also waiting for review &mdash; choosing it imports one transaction for both.</div>
+      {{end}}
     </div>
   </label>
   {{end}}

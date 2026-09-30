@@ -2782,3 +2782,33 @@ func TestHealth_countsAnEndedSessionAsDegraded(t *testing.T) {
 		t.Errorf("health does not count the ended session: %s", w.Body.String())
 	}
 }
+
+func TestReview_marksACandidateThatIsItselfWaiting(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.SetReviewQueue(&fakeReviewQueue{items: []ReviewItem{
+		{
+			ID: 7, BankName: "TestBank", Date: "2026-09-30", Amount: "-21.43",
+			Currency: "EUR", Payee: "Visa Edeka Aktiv Markt", BookingWaiting: true,
+		},
+		{
+			ID: 8, BankName: "TestBank", Date: "2026-10-07", Amount: "-24.90",
+			Currency: "EUR", Payee: "EDEKA AKTIV MARKT Gelnhausen",
+			Candidates: []ReviewCandidate{
+				{ID: "held:7", Date: "2026-09-30", Amount: "-21.43", PayeeName: "Visa Edeka Aktiv Markt",
+					Percent: 78, Why: "payee cut short", Held: true},
+				{ID: "txn-1", Date: "2026-10-02", Amount: "-5.00", PayeeName: "EDEKA", Percent: 55, Why: "payee exact"},
+			},
+		},
+	}})
+
+	body := get(t, srv, "/review").Body.String()
+	if n := strings.Count(body, "Also waiting for review"); n != 1 {
+		t.Errorf("the waiting marker appears %d times, want once, on the held authorisation only", n)
+	}
+	if !strings.Contains(body, `value="held:7"`) {
+		t.Error("the held authorisation cannot be chosen on the booking's review")
+	}
+	if n := strings.Count(body, "Its booking is waiting in this queue too"); n != 1 {
+		t.Errorf("the hint for the waiting authorisation appears %d times, want once", n)
+	}
+}

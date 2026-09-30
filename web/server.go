@@ -1665,6 +1665,8 @@ type ReviewCandidate struct {
 	// every field contributes its own term, and a reason is what makes the
 	// number possible to disagree with.
 	Why string
+
+	Held bool
 }
 
 // ReviewItem is one held transaction together with what it might belong to.
@@ -1690,6 +1692,8 @@ type ReviewItem struct {
 	// account cannot be reached still has to be visible: the whole point of the
 	// queue is that nothing disappears quietly.
 	Unavailable string
+
+	BookingWaiting bool
 }
 
 // InquiryItem is one decision the matcher made on its own that the user is being
