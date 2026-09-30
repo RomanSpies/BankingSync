@@ -342,6 +342,35 @@ their first clean sync.
 the consent afterwards. Set `EB_REQUEST_BALANCE_ACCESS=false` if your bank refuses
 an authorisation request that asks for balances.
 
+### What a transaction's status does
+
+Enable Banking reports every transaction with a status. bankingsync imports what
+the bank has booked or is about to book, and nothing else:
+
+| Status | Enable Banking's meaning | What bankingsync does |
+|---|---|---|
+| `BOOK` | accounted | imported as booked |
+| `PDNG` | expected | imported as pending and cleared once its booking arrives |
+| `HOLD` | account hold | treated as `PDNG`: a hold is an authorisation |
+| `OTHR` | unknown or not fitting | imported as booked, because a bank that cannot map its own status would otherwise lose real bookings |
+| `SCHD` | scheduled | not imported; it arrives once the bank reports it as `PDNG` or `BOOK` |
+| `CNCL`, `RJCT` | cancelled, rejected | never imported |
+
+Rows left out are left out of the opening balance too, and counted in
+`bankingsync_transactions_excluded_total`.
+
+**A cancelled authorisation stays in the budget and has to be deleted by hand.**
+When the bank reports an authorisation that was already imported as pending as
+`CNCL` or `RJCT`, bankingsync stops waiting for its booking — it would otherwise
+hold the fetch window open and could be settled by an unrelated booking later.
+Neither backend lets it delete the row, so the row stays uncleared, a
+`sync.authorisation_cancelled` warning names date, amount and payee, and
+`bankingsync_authorisations_withdrawn_total` counts it. The one exception is a
+booking of the same identity in the same feed — a pre-authorisation released and
+booked again — which settles the row as usual.
+
+A row the bank delivers as `BOOK` is imported as booked, whatever its date says.
+
 ### How a transaction is recognised
 
 Before any matching happens, an incoming transaction needs an identity that
@@ -1162,6 +1191,8 @@ on them.
 | `bankingsync_transactions_skipped_total` | Transactions skipped (already imported) |
 | `bankingsync_transactions_dropped_total` | Transactions Enable Banking returned that failed to parse and were dropped. A defect: it degrades the run and triggers the alert email |
 | `bankingsync_transactions_zero_amount_total` | Zero-amount transactions skipped on purpose, by `bank`. Some banks issue these routinely, so they are counted rather than treated as an error — a row without a direction has nothing to import and would match every other zero row |
+| `bankingsync_transactions_excluded_total` | Transactions not imported because of their status (`SCHD`, `CNCL`, `RJCT`), by `bank` and `status` — see [What a transaction's status does](#what-a-transactions-status-does) |
+| `bankingsync_authorisations_withdrawn_total` | Imported authorisations the bank later cancelled or rejected, by `bank` and `status`. Each one is an uncleared row to delete by hand |
 | `bankingsync_rules_applied_total` | Rule actions applied to new transactions |
 | `bankingsync_commit_errors_total` | Errors committing buffered changes. Actual only — Firefly is write-through and has nothing to flush |
 | `bankingsync_write_errors_total` | Per-transaction write errors against the budget backend |

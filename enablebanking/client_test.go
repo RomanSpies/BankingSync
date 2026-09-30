@@ -620,3 +620,33 @@ func TestParseDate_takesTheStatedDayNotTheInstant(t *testing.T) {
 		}
 	}
 }
+
+func TestParseTransaction_treatsAnAccountHoldAsPending(t *testing.T) {
+	got, err := newTestClient().parseTransaction(map[string]any{
+		"transaction_date":       "2026-09-10",
+		"transaction_amount":     map[string]any{"amount": "150.00", "currency": "EUR"},
+		"credit_debit_indicator": "DBIT",
+		"status":                 "HOLD",
+		"creditor":               map[string]any{"name": "Autovermietung"},
+	})
+	if err != nil {
+		t.Fatalf("parseTransaction: %v", err)
+	}
+	if got.Status != "PDNG" {
+		t.Errorf("Status: got %q, want PDNG — an account hold is an authorisation", got.Status)
+	}
+	if got.ContentKey != "" {
+		t.Errorf("ContentKey: got %q, want none — an authorisation has no booking identity", got.ContentKey)
+	}
+}
+
+func TestTransaction_importableRejectsScheduledCancelledAndRejected(t *testing.T) {
+	for status, want := range map[string]bool{
+		"BOOK": true, "PDNG": true, "OTHR": true, "": true,
+		"SCHD": false, "CNCL": false, "RJCT": false,
+	} {
+		if got := (Transaction{Status: status}).Importable(); got != want {
+			t.Errorf("Importable(%q) = %v, want %v", status, got, want)
+		}
+	}
+}

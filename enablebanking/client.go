@@ -287,10 +287,7 @@ func (c *Client) parseTransaction(t map[string]any) (Transaction, error) {
 	}
 	notes, sepa := parseNotesAndSEPA(t)
 	ref := getEntryRef(t)
-	status, _ := t["status"].(string)
-	if status == "" {
-		status = "BOOK"
-	}
+	status := parseStatus(t)
 	var content string
 	if status != "PDNG" {
 		content = contentKey(t, date)
@@ -310,6 +307,29 @@ func (c *Client) parseTransaction(t map[string]any) (Transaction, error) {
 		CounterpartyIBAN: parseCounterpartyIBAN(t),
 		SEPA:             sepa,
 	}, nil
+}
+
+func parseStatus(t map[string]any) string {
+	switch status, _ := t["status"].(string); status {
+	case "":
+		return "BOOK"
+	case "HOLD":
+		return "PDNG"
+	default:
+		return status
+	}
+}
+
+func (t Transaction) Importable() bool {
+	switch t.Status {
+	case "SCHD", "CNCL", "RJCT":
+		return false
+	}
+	return true
+}
+
+func (t Transaction) Withdrawn() bool {
+	return t.Status == "CNCL" || t.Status == "RJCT"
 }
 
 func parseCurrency(t map[string]any) string {

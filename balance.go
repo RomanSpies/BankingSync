@@ -594,6 +594,7 @@ func (s *Syncer) OpeningBalancePreview(
 	if err != nil {
 		return out, fmt.Errorf("fetch transactions: %w", err)
 	}
+	fetched, _ = splitImportable(fetched)
 	openReviews, err := s.st.CountMatchReviewsByAccount()
 	if err != nil {
 		return out, err

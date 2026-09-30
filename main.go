@@ -322,6 +322,88 @@ func listedPendingKeys(txns []enablebanking.Transaction, keys []string) map[stri
 	return listed
 }
 
+func splitImportable(txns []enablebanking.Transaction) (kept, excluded []enablebanking.Transaction) {
+	kept = make([]enablebanking.Transaction, 0, len(txns))
+	for _, t := range txns {
+		if t.Importable() {
+			kept = append(kept, t)
+		} else {
+			excluded = append(excluded, t)
+		}
+	}
+	return kept, excluded
+}
+
+func (s *Syncer) countExcluded(ctx context.Context, label string, excluded []enablebanking.Transaction) {
+	if len(excluded) > 0 {
+		log.Printf("[%s] %d transaction(s) left out because the bank has not booked them", label, len(excluded))
+	}
+	if s.met == nil || s.met.txExcluded == nil {
+		return
+	}
+	for _, t := range excluded {
+		s.met.txExcluded.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("bank", label),
+			attribute.String("status", t.Status)))
+	}
+}
+
+func (s *Syncer) releaseWithdrawn(ctx context.Context, label string, acct store.BankAccount, live, excluded []enablebanking.Transaction) {
+	withdrawn := slices.DeleteFunc(slices.Clone(excluded), func(t enablebanking.Transaction) bool { return !t.Withdrawn() })
+	if len(withdrawn) == 0 {
+		return
+	}
+	prefixes := s.st.Tunables().PayeePrefixes
+	byOrder := func(a, b enablebanking.Transaction) int {
+		switch {
+		case lessTxn(a, b):
+			return -1
+		case lessTxn(b, a):
+			return 1
+		}
+		return 0
+	}
+	live = slices.Clone(live)
+	slices.SortStableFunc(live, byOrder)
+	slices.SortStableFunc(withdrawn, byOrder)
+	liveKeys, _ := importKeys(live, prefixes)
+	listed := listedPendingKeys(live, liveKeys)
+	for _, k := range liveKeys {
+		listed[k] = true
+	}
+	keys, _ := importKeys(withdrawn, prefixes)
+	for i, t := range withdrawn {
+		legacyRef := ""
+		if t.EntryRef == "" {
+			legacyRef = t.TransactionID
+		}
+		key, val, ok := s.pendingOrLegacyEntry(acct.ID, keys[i], "", legacyRef)
+		if !ok || listed[key] {
+			continue
+		}
+		if err := s.state.DeletePending(acct.ID, key, s.st); err != nil {
+			bookkeepingFailed(ctx, "release withdrawn authorisation", label, t.EntryRef, err)
+			continue
+		}
+		rowID, _ := splitPendingVal(val)
+		log.Printf("[%s] Authorisation %s | %s | %s was withdrawn by the bank (%s): "+
+			"its uncleared row %s stays in the budget and has to be deleted by hand",
+			label, t.Date.Format("2006-01-02"), centsToDecimal(t.AmountCents), t.Payee, t.Status, rowID)
+		olog.Warn(ctx, "sync.authorisation_cancelled",
+			logs.String("bank", label),
+			logs.String("status", t.Status),
+			logs.String("date", t.Date.Format("2006-01-02")),
+			logs.String("amount", centsToDecimal(t.AmountCents)),
+			logs.String("payee", t.Payee),
+			logs.String("row_id", rowID))
+		if s.met != nil && s.met.withdrawn != nil {
+			s.met.withdrawn.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("bank", label),
+				attribute.String("status", t.Status)))
+		}
+	}
+}
+
 func (s *Syncer) countListedPendingTwin(ctx context.Context, label, key string) {
 	log.Printf("[%s] Booking %s left apart from the authorisation of the same key, which the bank still lists as pending", label, key)
 	if s.met != nil && s.met.listedPendingTwins != nil {
@@ -787,6 +869,7 @@ func (s *Syncer) run() bool {
 	// failure that never happened.
 	totalDropped := 0
 	zeroAmount := 0
+	excluded := 0
 	held := 0
 	var syncErrors []string
 	defer func() {
@@ -829,12 +912,14 @@ func (s *Syncer) run() bool {
 			logs.Int("skipped", skipped),
 			logs.Int("dropped", totalDropped),
 			logs.Int("zero_amount", zeroAmount),
+			logs.Int("excluded", excluded),
 			logs.Int("held_for_review", held),
 			logs.Int("errors", len(syncErrors)),
 		)
 		span.SetAttributes(
 			attribute.Int("tx_dropped", totalDropped),
 			attribute.Int("tx_zero_amount", zeroAmount),
+			attribute.Int("tx_excluded", excluded),
 			attribute.Int("tx_held", held),
 		)
 		if zeroAmount > 0 {
@@ -1050,6 +1135,10 @@ func (s *Syncer) run() bool {
 			logs.Float64("duration_sec", fetchElapsed),
 		)
 		fetchSpan.End()
+		rawTxns, excludedTxns := splitImportable(rawTxns)
+		excluded += len(excludedTxns)
+		s.countExcluded(ctx, label, excludedTxns)
+		s.releaseWithdrawn(ctx, label, acct, rawTxns, excludedTxns)
 		s.countReferenceSources(ctx, label, rawTxns)
 
 		markSynced := func() {

@@ -291,6 +291,8 @@ unanswerable, not that the matcher is fine.
 | `bankingsync_transactions_skipped_total` | counter | `backend` | Already imported. |
 | `bankingsync_transactions_dropped_total` | counter | `bank` | Failed to parse. **Any value above zero is a bug or a bank change.** |
 | `bankingsync_transactions_zero_amount_total` | counter | `bank` | Skipped on purpose, not an error. |
+| `bankingsync_transactions_excluded_total` | counter | `bank`, `status` | Not imported because of their status: `SCHD`, `CNCL` or `RJCT`. Counted per fetched record per run, so a scheduled payment counts on every run until it books. |
+| `bankingsync_authorisations_withdrawn_total` | counter | `bank`, `status` | Imported authorisations the bank later reported as `CNCL` or `RJCT`. Each tick is an uncleared row somebody has to delete by hand. |
 | `bankingsync_import_key_collisions_total` | counter | `bank` | Transactions that *would* have collided under the pre-v3 import key. Counts a defect that no longer happens; a rising series says a feed reaches the shape that used to lose data. |
 | `bankingsync_rules_applied_total` | counter | `backend` | Actual only — Firefly runs rules server-side. |
 | `bankingsync_commit_errors_total` | counter | `backend` | |
@@ -465,7 +467,7 @@ Every record the program can emit, by area:
 
 | Area | Records |
 |---|---|
-| `sync` | `sync.started` (I), `sync.finished` (I) |
+| `sync` | `sync.started` (I), `sync.finished` (I), `sync.authorisation_cancelled` (W) — an imported authorisation the bank cancelled or rejected; its uncleared row has to be deleted by hand |
 | `fetch_transactions` | `.completed` (I), `.failed` (E) |
 | `session` | `session.ended` (W) — the bank reported the account's session over (`reason` carries its code, e.g. `CLOSED_SESSION`); the account is skipped until it is renewed |
 | `import` | `import.batch.completed` (I) |
