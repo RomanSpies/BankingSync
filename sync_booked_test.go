@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 )
 
@@ -101,6 +102,63 @@ func TestSync_aReferencelessAuthorisationSeenAfterItsBookingIsNotImportedAgain(t
 		}
 		if txns[0].AmountCents != -13850 {
 			t.Fatalf("the booked row now reads %d cents; the stale authorisation rewrote it", txns[0].AmountCents)
+		}
+	})
+}
+
+func TestReviewQueue_assigningABookingToAPendingRowReleasesItsPendingEntry(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		held := holdOne(t, h)
+		acct := held.BankAccountID
+		if len(h.syncer.state.Pending(acct)) != 1 {
+			t.Fatalf("setup: %d pending entries, want the Spotify authorisation", len(h.syncer.state.Pending(acct)))
+		}
+
+		items, err := h.syncer.HeldTransactions(context.Background())
+		if err != nil || len(items) != 1 || len(items[0].Candidates) == 0 {
+			t.Fatalf("setup: review page %v, %v", items, err)
+		}
+		c := items[0].Candidates[0]
+		if err := h.syncer.ResolveHeld(context.Background(), items[0].ID, c.ID, c.Percent,
+			h.syncer.matchPolicy("").Version()); err != nil {
+			t.Fatalf("ResolveHeld: %v", err)
+		}
+
+		if n := len(h.syncer.state.Pending(acct)); n != 0 {
+			t.Errorf("%d pending entries left; the booking a person assigned settled the authorisation", n)
+		}
+		if !h.syncer.state.Booked(acct)(c.ID) {
+			t.Errorf("the row %s a person settled was not recorded as booked", c.ID)
+		}
+		if !h.syncer.state.Consumed(acct, "auth-1") {
+			t.Errorf("the authorisation auth-1 was not recorded as consumed by the booking")
+		}
+	})
+}
+
+func TestReviewQueue_aHeldBookingImportedAsNewIsRecordedAsBooked(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		held := holdOne(t, h)
+		items, err := h.syncer.HeldTransactions(context.Background())
+		if err != nil || len(items) != 1 {
+			t.Fatalf("setup: review page %v, %v", items, err)
+		}
+		if err := h.syncer.ResolveHeld(context.Background(), items[0].ID, "", 0,
+			h.syncer.matchPolicy("").Version()); err != nil {
+			t.Fatalf("ResolveHeld: %v", err)
+		}
+
+		var created string
+		for _, tx := range h.actualTxns(t) {
+			if tx.PayeeName == "Netflix" {
+				created = tx.ID
+			}
+		}
+		if created == "" {
+			t.Fatal("the booking a person called new was not imported")
+		}
+		if !h.syncer.state.Booked(held.BankAccountID)(created) {
+			t.Errorf("the booking imported from the review queue was not recorded as booked")
 		}
 	})
 }

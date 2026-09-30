@@ -286,6 +286,13 @@ func (s *Syncer) releaseHeld(
 			bookkeepingFailed(ctx, "AddImportedRef", bankLabel(acct), r.ExternalRef, err)
 		}
 	}
+	if r.Cleared {
+		if key, ok := s.state.FindPendingKeyByTxnID(r.BankAccountID, t.ID); ok && !created {
+			s.consumePending(ctx, bankLabel(acct), acct, key, t.ID, r.ExternalRef)
+		} else {
+			s.recordBooked(ctx, bankLabel(acct), acct, t.ID, "", r.ExternalRef)
+		}
+	}
 	// What the model said, and what turned out to be so. These are the only
 	// observations available that do not come from the model itself, which is
 	// what makes them worth keeping.
