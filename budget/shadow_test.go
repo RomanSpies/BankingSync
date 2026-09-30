@@ -60,11 +60,11 @@ func TestShadow_changesNothingItObserves(t *testing.T) {
 	in := []ImportedFields{{Date: onDay(12), AmountCents: -4200, PayeeName: "Edeka Milano"}}
 
 	plain, pShadow := build(), build()
-	a, err := ReconcileBatch(context.Background(), plain, "acct", in, nil, shadowPolicy(nil))
+	a, err := ReconcileBatch(context.Background(), plain, "acct", in, nil, nil, shadowPolicy(nil))
 	if err != nil {
 		t.Fatalf("without a trial: %v", err)
 	}
-	b, err := ReconcileBatch(context.Background(), pShadow, "acct", in, nil, shadowPolicy(eagerTrial()))
+	b, err := ReconcileBatch(context.Background(), pShadow, "acct", in, nil, nil, shadowPolicy(eagerTrial()))
 	if err != nil {
 		t.Fatalf("with a trial: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestShadow_arrangesTheWholeBatch(t *testing.T) {
 	out, err := ReconcileBatch(context.Background(), s, "acct", []ImportedFields{
 		{Date: onDay(12), AmountCents: -4200, PayeeName: "Hotel Berlin"},
 		{Date: onDay(12), AmountCents: -4201, PayeeName: "Hotel Berlin"},
-	}, nil, shadowPolicy(&Trial{Linkage: DefaultLinkage(), Calibration: Identity()}))
+	}, nil, nil, shadowPolicy(&Trial{Linkage: DefaultLinkage(), Calibration: Identity()}))
 	if err != nil {
 		t.Fatalf("ReconcileBatch: %v", err)
 	}

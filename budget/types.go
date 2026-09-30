@@ -21,6 +21,7 @@ type Transaction struct {
 	Cleared       bool
 	Reconciled    bool
 	Tags          []string
+	Provisional   bool
 }
 
 // AccountSpec identifies the budget account a bank account maps onto. Backends

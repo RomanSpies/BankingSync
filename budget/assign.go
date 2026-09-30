@@ -313,5 +313,6 @@ func interchangeable(a, b *Transaction) bool {
 	return a.AmountCents == b.AmountCents &&
 		a.Date.Equal(b.Date) &&
 		a.PayeeName == b.PayeeName &&
-		a.Cleared == b.Cleared
+		a.Cleared == b.Cleared &&
+		a.Provisional == b.Provisional
 }

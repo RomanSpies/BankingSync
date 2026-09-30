@@ -1185,7 +1185,7 @@ func (s *Syncer) run() bool {
 				s.traceDecision(matchCtx, tracer, label, d)
 			}
 
-			outs, err := budget.ReconcileBatch(matchCtx, s.ac, account.ID, fields, matchedThisRun, traced)
+			outs, err := budget.ReconcileBatch(matchCtx, s.ac, account.ID, fields, matchedThisRun, nil, traced)
 			if err != nil {
 				matchSpan.RecordError(err)
 				matchSpan.SetStatus(codes.Error, "reconcile failed")
