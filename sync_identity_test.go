@@ -149,25 +149,21 @@ func TestReviewQueue_aDecidedBookingRecordsItsIdentity(t *testing.T) {
 	})
 }
 
-func TestSync_aBookingWhoseTransactionIDChangedIsCounted(t *testing.T) {
-	h := newHarness(t)
-	reader := withMetrics(t, h)
-	h.addAccount(t, "")
-	_ = h.st.SetLastSyncDate(daysAgo(8))
-	h.reloadState(t)
-	first := bookedTxnPayee("", daysAgo(2), "4.00", "Kiosk")
-	first["transaction_id"] = "tid-1"
-	again := bookedTxnPayee("", daysAgo(2), "4.00", "Kiosk")
-	again["transaction_id"] = "tid-2"
+func TestSync_aBookingWhoseTransactionIDChangedIsNotImportedTwice(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(8))
+		h.reloadState(t)
 
-	h.eb.setPages([][]map[string]any{{first}})
-	h.syncer.run()
-	h.eb.setPages([][]map[string]any{{again}})
-	h.syncer.run()
+		h.eb.setPages([][]map[string]any{{onlyTransactionID(bookedTxnPayee("", daysAgo(2), "4.00", "Kiosk"), "tid-1")}})
+		h.syncer.run()
+		h.eb.setPages([][]map[string]any{{onlyTransactionID(bookedTxnPayee("", daysAgo(2), "4.00", "Kiosk"), "tid-2")}})
+		h.syncer.run()
 
-	if got := collectBy(t, reader, "bankingsync_reference_changed_total", "bank"); len(got) != 1 {
-		t.Fatalf("reference_changed_total = %v; the same record under a new transaction_id must be counted", got)
-	}
+		if n := len(h.actualTxns(t)); n != 1 {
+			t.Fatalf("%d rows; the bank changed the transaction_id of a record it had already delivered", n)
+		}
+	})
 }
 
 func TestSync_aRedeliveredBookingBesideItsTwinIsNotHeld(t *testing.T) {
@@ -285,4 +281,45 @@ func TestSync_aDriftedRedeliveryWithinReachStillAdoptsItsOwnRow(t *testing.T) {
 	if got := collectBy(t, reader, "bankingsync_booking_identity_changed_total", "bank"); len(got) != 1 {
 		t.Fatalf("booking_identity_changed_total = %v; the drift must be counted", got)
 	}
+}
+
+func onlyTransactionID(tx map[string]any, id string) map[string]any {
+	delete(tx, "entry_reference")
+	tx["transaction_id"] = id
+	return tx
+}
+
+func TestSync_aBookingImportedUnderItsTransactionIDIsNotImportedAgain(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(8))
+		h.reloadState(t)
+
+		h.eb.setPages([][]map[string]any{{bookedTxnPayee("T1", daysAgo(3), "12.00", "Kiosk")}})
+		h.syncer.run()
+		h.eb.setPages([][]map[string]any{{onlyTransactionID(bookedTxnPayee("", daysAgo(3), "12.00", "Kiosk"), "T1")}})
+		h.syncer.run()
+
+		if n := len(h.actualTxns(t)); n != 1 {
+			t.Fatalf("%d rows; a booking imported under its transaction_id before this version must still be recognised by it", n)
+		}
+	})
+}
+
+func TestSync_anAuthorisationKeyedByItsTransactionIDIsStillSettled(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(8))
+		h.reloadState(t)
+
+		h.eb.setPages([][]map[string]any{{pendingTxnPayee("T9", daysAgo(4), "30.00", "Hotel Berlin")}})
+		h.syncer.run()
+		h.eb.setPages([][]map[string]any{{onlyTransactionID(bookedTxnPayee("", daysAgo(2), "34.50", "HBM Hospitality GmbH"), "T9")}})
+		h.syncer.run()
+
+		txns := h.actualTxns(t)
+		if len(txns) != 1 || !txns[0].Cleared || txns[0].AmountCents != -3450 {
+			t.Fatalf("rows %+v; an authorisation keyed by its transaction_id before this version must still be settled by its booking", txns)
+		}
+	})
 }

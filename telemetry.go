@@ -43,7 +43,6 @@ type syncMetrics struct {
 	refSource     metric.Int64Counter
 
 	listedPendingTwins metric.Int64Counter
-	referenceChanged   metric.Int64Counter
 	identityChanged    metric.Int64Counter
 	matchReviews       metric.Int64Counter
 	reviewChoice       metric.Int64Counter
@@ -232,8 +231,6 @@ func newSyncMetrics(meter metric.Meter) *syncMetrics {
 		metric.WithDescription("Fetched transactions by the field their bank reference came from"))
 	listedPendingTwins, _ := meter.Int64Counter("bankingsync_listed_pending_twins_total",
 		metric.WithDescription("Bookings kept apart from a same-key authorisation the bank still lists as pending"))
-	referenceChanged, _ := meter.Int64Counter("bankingsync_reference_changed_total",
-		metric.WithDescription("Bookings whose bank record was seen before under a different reference"))
 	identityChanged, _ := meter.Int64Counter("bankingsync_booking_identity_changed_total",
 		metric.WithDescription("Bookings that adopted a row booked for a different bank record"))
 	// The bucket edges sit around the two thresholds rather than being evenly
@@ -347,7 +344,6 @@ func newSyncMetrics(meter metric.Meter) *syncMetrics {
 		refSource:     refSource,
 
 		listedPendingTwins: listedPendingTwins,
-		referenceChanged:   referenceChanged,
 		identityChanged:    identityChanged,
 		matchReviews:       matchReviews,
 		reviewChoice:       reviewChoice,

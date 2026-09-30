@@ -394,11 +394,10 @@ func TestGetEntryRef_entryReference(t *testing.T) {
 	}
 }
 
-func TestGetEntryRef_fallbackToTransactionID(t *testing.T) {
+func TestGetEntryRef_neverFallsBackToTransactionID(t *testing.T) {
 	raw := map[string]any{"transaction_id": "TXN-002"}
-	got := getEntryRef(raw)
-	if got != "TXN-002" {
-		t.Errorf("got %q, want TXN-002", got)
+	if got := getEntryRef(raw); got != "" {
+		t.Errorf("got %q; Enable Banking documents transaction_id as liable to change between retrievals, so it cannot be a reference", got)
 	}
 }
 

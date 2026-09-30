@@ -43,13 +43,14 @@ type Transaction struct {
 	Status string
 	Date   time.Time
 
-	AmountCents int64
-	Currency    string
-	Payee       string
-	Notes       string
-	EntryRef    string
-	RefSource   string
-	ContentKey  string
+	AmountCents   int64
+	Currency      string
+	Payee         string
+	Notes         string
+	EntryRef      string
+	TransactionID string
+	RefSource     string
+	ContentKey    string
 
 	CounterpartyIBAN string
 	SEPA             SEPARefs
@@ -302,6 +303,7 @@ func (c *Client) parseTransaction(t map[string]any) (Transaction, error) {
 		Payee:            payee,
 		Notes:            notes,
 		EntryRef:         ref,
+		TransactionID:    transactionID(t),
 		RefSource:        refSource(t),
 		ContentKey:       content,
 		CounterpartyIBAN: parseCounterpartyIBAN(t),
@@ -506,9 +508,11 @@ func refSource(t map[string]any) string {
 }
 
 func getEntryRef(t map[string]any) string {
-	if v, ok := t["entry_reference"].(string); ok && v != "" {
-		return v
-	}
+	v, _ := t["entry_reference"].(string)
+	return v
+}
+
+func transactionID(t map[string]any) string {
 	v, _ := t["transaction_id"].(string)
 	return v
 }

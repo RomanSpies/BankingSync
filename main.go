@@ -1313,15 +1313,17 @@ func (s *Syncer) run() bool {
 			pendingKey := txnKeys[txnIndex]
 			// Only reference-less rows ever had a different identity; a bank
 			// reference is what it always was.
-			legacyKey := ""
+			legacyKey, legacyRef := "", ""
 			if ref == "" {
 				legacyKey = legacyImportKey(date, amountCents)
+				legacyRef = txn.TransactionID
 			}
 
 			// Already waiting for a decision. It must not be offered a second time,
 			// and it must not slip in through the ordinary path either — the
 			// decision is what releases it.
-			if held := s.state.Held(acct.ID); held[pendingKey] || (legacyKey != "" && held[legacyKey]) {
+			if held := s.state.Held(acct.ID); held[pendingKey] || (legacyKey != "" && held[legacyKey]) ||
+				(legacyRef != "" && held[legacyRef]) {
 				continue
 			}
 
@@ -1353,7 +1355,8 @@ func (s *Syncer) run() bool {
 			booked.Identity = identities[txnIndex]
 
 			if txnStatus == "PDNG" {
-				if s.alreadyBooked(acct.ID, ref, pendingKey, legacyKey) {
+				if s.alreadyBooked(acct.ID, ref, pendingKey, legacyKey) ||
+					(legacyRef != "" && s.alreadyBooked(acct.ID, legacyRef, legacyRef, "")) {
 					if t := knownByRef[ref]; ref != "" && t != nil {
 						matchedThisRun = append(matchedThisRun, t)
 					}
@@ -1362,7 +1365,7 @@ func (s *Syncer) run() bool {
 					acctSkipped++
 					continue
 				}
-				if _, _, exists := s.pendingEntry(acct.ID, pendingKey, legacyKey); !exists {
+				if _, _, exists := s.pendingOrLegacyEntry(acct.ID, pendingKey, legacyKey, legacyRef); !exists {
 					work = append(work, modelWork{
 						kind: workPending, fields: pending,
 						pendingKey: pendingKey, ref: ref, date: date,
@@ -1372,7 +1375,7 @@ func (s *Syncer) run() bool {
 					}
 					continue
 				} else {
-					_, val, _ := s.pendingEntry(acct.ID, pendingKey, legacyKey)
+					_, val, _ := s.pendingOrLegacyEntry(acct.ID, pendingKey, legacyKey, legacyRef)
 					if prev, _ := splitPendingVal(val); prev != "" {
 						if t := knownByID[prev]; t != nil {
 							matchedThisRun = append(matchedThisRun, t)
@@ -1394,11 +1397,16 @@ func (s *Syncer) run() bool {
 						continue
 					}
 				}
-				if ref != "" {
-					if _, seen := s.state.BookedUnder(acct.ID, booked.Identity); seen {
-						s.countReferenceChanged(ctx, label)
+				if _, done := s.state.Imported(acct.ID)[legacyRef]; legacyRef != "" && done {
+					if t := knownByRef[legacyRef]; t != nil {
+						matchedThisRun = append(matchedThisRun, t)
+						s.recordIdentity(ctx, label, acct, booked.Identity, t.ID, legacyRef)
 					}
-				} else if txnID, seen := s.state.BookedUnder(acct.ID, booked.Identity); seen {
+					skipped++
+					acctSkipped++
+					continue
+				}
+				if txnID, seen := s.state.BookedUnder(acct.ID, booked.Identity); ref == "" && seen {
 					claim := knownByID[txnID]
 					if claim == nil {
 						claim = &budget.Transaction{ID: txnID}
@@ -1410,7 +1418,7 @@ func (s *Syncer) run() bool {
 					continue
 				}
 
-				matchedKey, pendingVal, inPending := s.pendingEntry(acct.ID, pendingKey, legacyKey)
+				matchedKey, pendingVal, inPending := s.pendingOrLegacyEntry(acct.ID, pendingKey, legacyKey, legacyRef)
 				if inPending && listed[matchedKey] {
 					inPending = false
 					s.countListedPendingTwin(ctx, label, pendingKey)
@@ -1437,8 +1445,12 @@ func (s *Syncer) run() bool {
 								continue
 							}
 						}
+						labelRef := ref
+						if legacyRef != "" && matchedKey == legacyRef {
+							labelRef = legacyRef
+						}
 						s.recordReferenceLabel(ctx, runID, label, acct, &asItWas, booked,
-							pendingKey, ref, pol)
+							pendingKey, labelRef, pol)
 
 						matchedThisRun = append(matchedThisRun, existingTxn)
 						newlyTouched = append(newlyTouched, existingTxn)
@@ -1738,6 +1750,13 @@ func lessTxn(a, b enablebanking.Transaction) bool {
 // It returns the key that actually matched, because that is the key the entry
 // has to be deleted under once the booking has consumed it. Writing only ever
 // uses the current scheme, so the old one drains away by itself.
+func (s *Syncer) pendingOrLegacyEntry(acctID int64, key, legacy, legacyRef string) (matched, value string, ok bool) {
+	if matched, value, ok = s.pendingEntry(acctID, key, legacy); ok || legacyRef == "" {
+		return matched, value, ok
+	}
+	return s.pendingEntry(acctID, legacyRef, "")
+}
+
 func (s *Syncer) pendingEntry(acctID int64, key, legacy string) (matched, value string, ok bool) {
 	pending := s.state.Pending(acctID)
 	if v, found := pending[key]; found {
@@ -2024,12 +2043,6 @@ func (s *Syncer) countIdentityChanged(ctx context.Context, label string, acct st
 	log.Printf("[%s] Booking adopted row %s, which was booked for a different bank record — the record changed, or a twin was absorbed", label, txnID)
 	if s.met != nil && s.met.identityChanged != nil {
 		s.met.identityChanged.Add(ctx, 1, metric.WithAttributes(attribute.String("bank", label)))
-	}
-}
-
-func (s *Syncer) countReferenceChanged(ctx context.Context, label string) {
-	if s.met != nil && s.met.referenceChanged != nil {
-		s.met.referenceChanged.Add(ctx, 1, metric.WithAttributes(attribute.String("bank", label)))
 	}
 }
 
