@@ -864,6 +864,9 @@ func (s *Syncer) run() bool {
 	if err := s.state.PrunePendingMap(s.st); err != nil {
 		log.Printf("Prune pending map: %v", err)
 	}
+	if err := s.state.PruneBookedRows(s.st); err != nil {
+		log.Printf("Prune booked rows: %v", err)
+	}
 	// Both of these had retention policies written down and no caller. A held
 	// transaction past the window describes an import the bank will not offer
 	// again, and a decision past it describes one nobody can check any more.
@@ -1378,9 +1381,7 @@ func (s *Syncer) run() bool {
 
 						matchedThisRun = append(matchedThisRun, existingTxn)
 						newlyTouched = append(newlyTouched, existingTxn)
-						if err := s.state.DeletePending(acct.ID, matchedKey, s.st); err != nil {
-							bookkeepingFailed(ctx, "DeletePending", label, ref, err)
-						}
+						s.consumePending(ctx, label, acct, matchedKey, existingTxn.ID, ref)
 						if ref != "" {
 							if err := s.state.AddImportedRef(acct.ID, ref, date.Format("2006-01-02"), s.st); err != nil {
 								bookkeepingFailed(ctx, "AddImportedRef", label, ref, err)
@@ -1882,9 +1883,7 @@ func (s *Syncer) settle(
 		return dispositionAdded, true
 
 	case workStalePending:
-		if err := s.state.DeletePending(acct.ID, w.matchedKey, s.st); err != nil {
-			bookkeepingFailed(ctx, "DeletePending", label, w.ref, err)
-		}
+		s.consumePending(ctx, label, acct, w.matchedKey, t.ID, w.ref)
 		rememberRef()
 		if wasCreated {
 			return dispositionAdded, true
@@ -1896,15 +1895,28 @@ func (s *Syncer) settle(
 	default:
 		rememberRef()
 		if wasCreated {
+			s.recordBooked(ctx, label, acct, t.ID, "", w.ref)
 			return dispositionAdded, true
 		}
 		if stale, ok := s.state.FindPendingKeyByTxnID(acct.ID, t.ID); ok {
-			if err := s.state.DeletePending(acct.ID, stale, s.st); err != nil {
-				bookkeepingFailed(ctx, "DeletePending", label, w.ref, err)
-			}
+			s.consumePending(ctx, label, acct, stale, t.ID, w.ref)
 			return dispositionUpdated, true
 		}
+		s.recordBooked(ctx, label, acct, t.ID, "", w.ref)
 		return dispositionSkipped, false
+	}
+}
+
+func (s *Syncer) consumePending(ctx context.Context, label string, acct store.BankAccount, pendingKey, txnID, ref string) {
+	if err := s.state.DeletePending(acct.ID, pendingKey, s.st); err != nil {
+		bookkeepingFailed(ctx, "DeletePending", label, ref, err)
+	}
+	s.recordBooked(ctx, label, acct, txnID, pendingKey, ref)
+}
+
+func (s *Syncer) recordBooked(ctx context.Context, label string, acct store.BankAccount, txnID, pendingKey, ref string) {
+	if err := s.state.RecordBooked(acct.ID, txnID, pendingKey, s.st); err != nil {
+		bookkeepingFailed(ctx, "RecordBooked", label, ref, err)
 	}
 }
 
