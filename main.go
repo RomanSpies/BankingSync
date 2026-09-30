@@ -1027,6 +1027,7 @@ func (s *Syncer) run() bool {
 			logs.Float64("duration_sec", fetchElapsed),
 		)
 		fetchSpan.End()
+		s.countReferenceSources(ctx, label, rawTxns)
 
 		markSynced := func() {
 			synced = append(synced, acct.ID)
@@ -1917,6 +1918,23 @@ func (s *Syncer) settle(
 		}
 		s.recordBooked(ctx, label, acct, t.ID, "", w.ref)
 		return dispositionSkipped, false
+	}
+}
+
+func (s *Syncer) countReferenceSources(ctx context.Context, label string, txns []enablebanking.Transaction) {
+	if s.met == nil || s.met.refSource == nil {
+		return
+	}
+	type origin struct{ status, source string }
+	counts := map[origin]int64{}
+	for _, t := range txns {
+		counts[origin{t.Status, t.RefSource}]++
+	}
+	for o, n := range counts {
+		s.met.refSource.Add(ctx, n, metric.WithAttributes(
+			attribute.String("bank", label),
+			attribute.String("status", o.status),
+			attribute.String("source", o.source)))
 	}
 }
 

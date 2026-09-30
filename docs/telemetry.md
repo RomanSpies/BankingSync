@@ -225,6 +225,7 @@ and a dashboard should say so in a panel description rather than imply freshness
 | `bankingsync_match_shadow_decisions_total` | counter | `bank`, `backend`, `candidate`, `agreement` | Decisions made while a candidate parameter set was being watched. |
 | `bankingsync_match_multiplicity_total` | counter | `bank`, `backend` | Transactions settled onto one of several rows nothing could tell apart. |
 | `bankingsync_near_miss_total` | counter | `bank`, `backend`, `reason` | Transactions created although an open row nearly matched. |
+| `bankingsync_reference_source_total` | counter | `bank`, `status`, `source` | Fetched transactions by the field their bank reference was taken from. Counted per fetched record per run, so a re-delivered transaction counts again; the ratio between sources is what matters. |
 
 Label values:
 
@@ -241,6 +242,10 @@ Label values:
 - `choice` ∈ `model_best`, `other_candidate`, `created_new`.
 - `verdict` ∈ `same_payment`, `different_payments`, `unknown`.
 - `agreement` ∈ `same`, `different`.
+- `source` on `reference_source_total` ∈ `entry_reference`, `transaction_id`,
+  `none`. `transaction_id` is the one to watch: Enable Banking documents it as
+  liable to change when the list is retrieved again, so a bank whose references
+  come from it has no stable identity for its transactions.
 - `reason` on `near_miss_total` ∈ `ambiguous`, `payee`, `amount`, `date`,
   `booked` (an authorisation created beside a row bankingsync had already booked,
   which it would otherwise have adopted).

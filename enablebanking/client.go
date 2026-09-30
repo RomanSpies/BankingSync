@@ -46,10 +46,17 @@ type Transaction struct {
 	Payee       string
 	Notes       string
 	EntryRef    string
+	RefSource   string
 
 	CounterpartyIBAN string
 	SEPA             SEPARefs
 }
+
+const (
+	RefSourceEntryReference = "entry_reference"
+	RefSourceTransactionID  = "transaction_id"
+	RefSourceNone           = "none"
+)
 
 // Client is an Enable Banking API client that fetches transactions using JWT
 // authentication signed with an RSA private key.
@@ -288,6 +295,7 @@ func (c *Client) parseTransaction(t map[string]any) (Transaction, error) {
 		Payee:            payee,
 		Notes:            notes,
 		EntryRef:         ref,
+		RefSource:        refSource(t),
 		CounterpartyIBAN: parseCounterpartyIBAN(t),
 		SEPA:             sepa,
 	}, nil
@@ -427,6 +435,16 @@ func parseNotesAndSEPA(t map[string]any) (string, SEPARefs) {
 		return parseSEPA(ref)
 	}
 	return joinRemittanceAndSEPA(t)
+}
+
+func refSource(t map[string]any) string {
+	if v, ok := t["entry_reference"].(string); ok && v != "" {
+		return RefSourceEntryReference
+	}
+	if v, ok := t["transaction_id"].(string); ok && v != "" {
+		return RefSourceTransactionID
+	}
+	return RefSourceNone
 }
 
 func getEntryRef(t map[string]any) string {

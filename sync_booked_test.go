@@ -162,3 +162,34 @@ func TestReviewQueue_aHeldBookingImportedAsNewIsRecordedAsBooked(t *testing.T) {
 		}
 	})
 }
+
+func TestSync_referenceSourcesAreCountedByStatus(t *testing.T) {
+	h := newHarness(t)
+	reader := withMetrics(t, h)
+	h.addAccount(t, "")
+	_ = h.st.SetLastSyncDate(daysAgo(8))
+	h.reloadState(t)
+
+	byID := bookedTxnPayee("", daysAgo(2), "4.00", "Kiosk")
+	byID["transaction_id"] = "tid-1"
+	h.eb.setPages([][]map[string]any{{
+		bookedTxnPayee("e-1", daysAgo(3), "9.99", "Spotify"),
+		pendingTxnPayee("e-2", daysAgo(2), "5.00", "Bakery"),
+		byID,
+		bookedTxnPayee("", daysAgo(1), "3.50", "Cafe Sonne"),
+	}})
+	h.syncer.run()
+
+	got := collectBy(t, reader, "bankingsync_reference_source_total", "status", "source")
+	want := map[string]float64{
+		"BOOK/entry_reference": 1,
+		"PDNG/entry_reference": 1,
+		"BOOK/transaction_id":  1,
+		"BOOK/none":            1,
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("reference_source_total{%s} = %v, want %v (all: %v)", k, got[k], v, got)
+		}
+	}
+}

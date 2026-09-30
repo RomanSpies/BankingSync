@@ -40,6 +40,7 @@ type syncMetrics struct {
 	txZeroAmount  metric.Int64Counter
 	balanceChecks metric.Int64Counter
 	nearMiss      metric.Int64Counter
+	refSource     metric.Int64Counter
 	matchReviews  metric.Int64Counter
 	reviewChoice  metric.Int64Counter
 	matchProb     metric.Float64Histogram
@@ -223,6 +224,8 @@ func newSyncMetrics(meter metric.Meter) *syncMetrics {
 		metric.WithDescription("Balance comparisons concluded, by outcome"))
 	nearMiss, _ := meter.Int64Counter("bankingsync_near_miss_total",
 		metric.WithDescription("Transactions created although an open row in the window nearly matched"))
+	refSource, _ := meter.Int64Counter("bankingsync_reference_source_total",
+		metric.WithDescription("Fetched transactions by the field their bank reference came from"))
 	// The bucket edges sit around the two thresholds rather than being evenly
 	// spaced. The point of this histogram is to let an operator see where their
 	// bank's transactions actually fall before moving a threshold, so resolution
@@ -331,6 +334,7 @@ func newSyncMetrics(meter metric.Meter) *syncMetrics {
 		txZeroAmount:  txZeroAmount,
 		balanceChecks: balanceChecks,
 		nearMiss:      nearMiss,
+		refSource:     refSource,
 		matchReviews:  matchReviews,
 		reviewChoice:  reviewChoice,
 		matchProb:     matchProb,
