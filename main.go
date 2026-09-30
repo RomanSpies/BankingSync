@@ -861,6 +861,7 @@ func (s *Syncer) run() bool {
 	status := "success"
 	syncMessage := ""
 	added, updated, skipped := 0, 0, 0
+	skippedBy := map[string]int{}
 	// Two different things, deliberately not one counter. A dropped transaction is
 	// one Enable Banking sent that could not be parsed, which is a defect worth an
 	// email. A zero-amount row is one bankingsync declines on purpose, and at banks
@@ -1242,6 +1243,11 @@ func (s *Syncer) run() bool {
 		acctInterrupted := false
 		var resumeFrom time.Time
 		importStarted := time.Now()
+		skip := func(reason string) {
+			skipped++
+			acctSkipped++
+			skippedBy[reason]++
+		}
 		failWrite := func(what string, err error) {
 			acctWriteFailed = true
 			log.Printf("[%s] %s: %v", label, what, err)
@@ -1362,8 +1368,7 @@ func (s *Syncer) run() bool {
 					updated++
 					acctUpdated++
 				default:
-					skipped++
-					acctSkipped++
+					skip("adopted")
 				}
 				// Only now is this transaction finished, so only now may the
 				// resume point pass it.
@@ -1450,8 +1455,7 @@ func (s *Syncer) run() bool {
 						matchedThisRun = append(matchedThisRun, t)
 					}
 					log.Printf("[%s] Authorisation %s already settled by its booking, skipped", label, pendingKey)
-					skipped++
-					acctSkipped++
+					skip("authorisation_settled")
 					continue
 				}
 				if _, _, exists := s.pendingOrLegacyEntry(acct.ID, pendingKey, legacyKey, legacyRef); !exists {
@@ -1470,8 +1474,7 @@ func (s *Syncer) run() bool {
 							matchedThisRun = append(matchedThisRun, t)
 						}
 					}
-					skipped++
-					acctSkipped++
+					skip("authorisation_seen")
 				}
 
 			} else {
@@ -1481,8 +1484,7 @@ func (s *Syncer) run() bool {
 						if t := knownByRef[ref]; t != nil {
 							matchedThisRun = append(matchedThisRun, t)
 						}
-						skipped++
-						acctSkipped++
+						skip("reference")
 						continue
 					}
 				}
@@ -1491,8 +1493,7 @@ func (s *Syncer) run() bool {
 						matchedThisRun = append(matchedThisRun, t)
 						s.recordIdentity(ctx, label, acct, booked.Identity, t.ID, legacyRef)
 					}
-					skipped++
-					acctSkipped++
+					skip("transaction_id")
 					continue
 				}
 				if txnID, seen := s.state.BookedUnder(acct.ID, booked.Identity); ref == "" && seen {
@@ -1502,8 +1503,7 @@ func (s *Syncer) run() bool {
 					}
 					matchedThisRun = append(matchedThisRun, claim)
 					s.recordIdentity(ctx, label, acct, booked.Identity, txnID, ref)
-					skipped++
-					acctSkipped++
+					skip("content")
 					continue
 				}
 
@@ -1693,7 +1693,11 @@ func (s *Syncer) run() bool {
 	if s.met != nil {
 		s.met.txAdded.Add(ctx, int64(added), metric.WithAttributes(attribute.String("backend", s.backendName)))
 		s.met.txConfirmed.Add(ctx, int64(updated), metric.WithAttributes(attribute.String("backend", s.backendName)))
-		s.met.txSkipped.Add(ctx, int64(skipped), metric.WithAttributes(attribute.String("backend", s.backendName)))
+		for reason, n := range skippedBy {
+			s.met.txSkipped.Add(ctx, int64(n), metric.WithAttributes(
+				attribute.String("backend", s.backendName),
+				attribute.String("reason", reason)))
+		}
 	}
 	log.Printf("Done: %d added, %d confirmed, %d skipped", added, updated, skipped)
 
