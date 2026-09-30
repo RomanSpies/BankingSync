@@ -424,11 +424,19 @@ cannot outweigh the rest of the model. Below fifty transactions the correction
 stands down: a frequency drawn from a handful of rows is a coincidence, not a
 distribution.
 
-Three hard rules run **before** the model and are not probabilistic:
+Four hard rules run **before** the model and are not probabilistic:
 
 - a bank reference that already matches is a lookup, not a guess
 - a settled row carrying somebody else's reference is never re-adopted
 - a row already settled by a bank reference in this batch is not on offer
+- an authorisation never adopts a row bankingsync itself recorded as booked.
+  The model compares every pair as authorisation first, booking second, and a
+  booking is where a card payment ends — an authorisation arriving after it is a
+  stale copy or a second purchase, never its beginning. What counts is
+  bankingsync's own record of what it booked, not the budget's cleared flag: a
+  row you typed in by hand reads as cleared in Firefly and stays adoptable. An
+  authorisation created although a booked row would otherwise have matched it
+  is counted as `bankingsync_near_miss_total{reason="booked"}`
 
 ### The batch is decided together
 
@@ -535,7 +543,9 @@ gets written is still what the bank sent.
 
 When a transaction is created although something in the window nearly matched,
 the reason is logged and counted in `bankingsync_near_miss_total`: `amount` for a
-row close in value, `payee` for one the payee levels refused, `date` otherwise.
+row close in value, `payee` for one the payee levels refused, `date` otherwise,
+and `booked` for an authorisation that would have matched a row already booked
+(see the hard rules above).
 
 **`ambiguous` no longer appears there under the default configuration.** Two rows
 that fit equally well used to produce a duplicate and a counter tick; they are

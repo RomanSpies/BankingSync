@@ -164,6 +164,7 @@ func ReconcileBatch(
 
 	windows := make([]int, len(model))
 	rows := make([][]Candidate, len(model))
+	twins := make([][]*Transaction, len(model))
 	assessStarted := time.Now()
 	for k, i := range model {
 		from, to := WindowBounds(in[i].Date)
@@ -172,6 +173,7 @@ func ReconcileBatch(
 			return nil, err
 		}
 		candidates = WithHeld(candidates, held, in[i])
+		twins[k] = pol.bookedTwins(candidates, in[i])
 		windows[k] = len(candidates)
 		rows[k] = Assess(candidates, in[i], taken, pol)
 		trace.Weighed += len(rows[k])
@@ -282,6 +284,7 @@ func ReconcileBatch(
 
 		default:
 			pol.reportNearMiss(scored, assignments[k].Margin)
+			pol.reportBookedTwin(twins[k], in[i], taken)
 			created, err := s.Create(ctx, accountID, in[i])
 			if err != nil {
 				return nil, err
@@ -686,6 +689,8 @@ type Policy struct {
 	// that trigger this cannot be reproduced here; the counters are how the
 	// affected user tells us which mechanism actually fires.
 	OnNearMiss func(reason string, candidate *Transaction)
+
+	Booked func(txnID string) bool
 }
 
 // withinTolerance reports whether booked may be treated as the settled form of
@@ -732,6 +737,32 @@ func (p Policy) reportNearMiss(scored []Candidate, margin float64) {
 		p.OnNearMiss("amount", top.Transaction)
 	default:
 		p.OnNearMiss("date", top.Transaction)
+	}
+}
+
+func (p Policy) alreadyBooked(c *Transaction, in ImportedFields) bool {
+	return !in.Cleared && p.Booked != nil && p.Booked(c.ID)
+}
+
+func (p Policy) bookedTwins(candidates []*Transaction, in ImportedFields) []*Transaction {
+	var out []*Transaction
+	for _, c := range candidates {
+		if p.alreadyBooked(c, in) && adoptable(c, in.ExternalRef) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func (p Policy) reportBookedTwin(twins []*Transaction, in ImportedFields, taken []*Transaction) {
+	if len(twins) == 0 || p.OnNearMiss == nil {
+		return
+	}
+	unguarded := p
+	unguarded.Booked = nil
+	scored := Assess(twins, in, taken, unguarded)
+	if len(scored) > 0 && scored[0].Probability >= p.autoProbability() {
+		p.OnNearMiss("booked", scored[0].Transaction)
 	}
 }
 
@@ -1026,6 +1057,9 @@ func Assess(candidates []*Transaction, in ImportedFields, alreadyMatched []*Tran
 			continue
 		}
 		if !adoptable(c, in.ExternalRef) {
+			continue
+		}
+		if pol.alreadyBooked(c, in) {
 			continue
 		}
 		survivors = append(survivors, c)

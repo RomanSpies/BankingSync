@@ -245,6 +245,7 @@ func (s *Syncer) heldCandidates(
 ) ([]budget.Candidate, string, budget.Policy, error) {
 	pol := s.matchPolicy(bankLabel(acct))
 	pol.OnNearMiss = nil
+	pol.Booked = s.state.Booked(acct.ID)
 
 	if r.Backend != "" && r.Backend != s.backendName {
 		return nil, "", pol, web.Refuse("this was held while %s was the budget backend, and "+

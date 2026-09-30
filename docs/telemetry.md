@@ -241,7 +241,9 @@ Label values:
 - `choice` ∈ `model_best`, `other_candidate`, `created_new`.
 - `verdict` ∈ `same_payment`, `different_payments`, `unknown`.
 - `agreement` ∈ `same`, `different`.
-- `reason` on `near_miss_total` ∈ `ambiguous`, `payee`, `amount`, `date`.
+- `reason` on `near_miss_total` ∈ `ambiguous`, `payee`, `amount`, `date`,
+  `booked` (an authorisation created beside a row bankingsync had already booked,
+  which it would otherwise have adopted).
 - `candidate` is the watched set's own 12-hex `param_version`. It is on the
   series because a counter does not reset when the watch moves on, and two
   candidates' tallies would otherwise add into one line describing neither.

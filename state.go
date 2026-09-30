@@ -288,9 +288,8 @@ func (s *State) RecordBooked(bankAccountID int64, txnID, pendingKey string, st *
 }
 
 func (s *State) Booked(bankAccountID int64) func(txnID string) bool {
-	rows := s.BookedRows[bankAccountID]
 	return func(txnID string) bool {
-		_, ok := rows[txnID]
+		_, ok := s.BookedRows[bankAccountID][txnID]
 		return ok
 	}
 }

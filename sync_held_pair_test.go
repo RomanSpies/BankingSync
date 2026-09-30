@@ -255,3 +255,63 @@ func TestReviewQueue_aHeldAuthorisationAlreadyDecidedIsRefused(t *testing.T) {
 		}
 	})
 }
+
+func TestSync_aPendingIsNotHeldAgainstARowTheBankAlreadyBooked(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(14))
+		h.reloadState(t)
+
+		h.eb.setPages([][]map[string]any{{bookedTxnPayee("", daysAgo(12), "20.00", "EDEKA AKTIV MARKT")}})
+		h.syncer.run()
+		h.eb.setPages([][]map[string]any{{pendingTxnPayee("", daysAgo(8), "21.43", "Visa Edeka Aktiv Markt")}})
+		h.syncer.run()
+		if n, _ := h.st.CountMatchReviews(); n != 0 {
+			t.Fatalf("%d reviews; an authorisation was held against a purchase the bank had already booked", n)
+		}
+
+		h.eb.setPages([][]map[string]any{{bookedTxnPayee("", daysAgo(1), "21.43", "EDEKA AKTIV MARKT Gelnhausen")}})
+		h.syncer.run()
+
+		txns := h.actualTxns(t)
+		if len(txns) != 2 {
+			t.Fatalf("%d rows, want the earlier purchase and the settled authorisation", len(txns))
+		}
+		for _, tx := range txns {
+			if tx.AmountCents == -2000 && tx.Date.Format("2006-01-02") != daysAgo(12) {
+				t.Errorf("the earlier booked purchase was rewritten: %+v", tx)
+			}
+			if tx.AmountCents == -2143 && !tx.Cleared {
+				t.Errorf("the authorisation was not settled by its booking: %+v", tx)
+			}
+		}
+		if n, _ := h.st.CountMatchReviews(); n != 0 {
+			t.Fatalf("%d reviews after the booking arrived, want none", n)
+		}
+	})
+}
+
+func TestReviewQueue_aHeldAuthorisationDoesNotOfferARowAlreadyBooked(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(14))
+		h.reloadState(t)
+
+		h.eb.setPages([][]map[string]any{{pendingTxnPayee("", daysAgo(12), "20.00", "EDEKA AKTIV MARKT")}})
+		h.syncer.run()
+		h.eb.setPages([][]map[string]any{{bookedTxnPayee("", daysAgo(9), "30.00", "Rewe")}})
+		h.syncer.run()
+		h.eb.setPages([][]map[string]any{{pendingTxnPayee("", daysAgo(8), "21.43", "Visa Edeka Aktiv Markt")}})
+		h.syncer.run()
+
+		items, err := h.syncer.HeldTransactions(context.Background())
+		if err != nil || len(items) != 1 {
+			t.Fatalf("setup: %d held, %v; want the Visa authorisation held against the EDEKA one", len(items), err)
+		}
+		for _, c := range items[0].Candidates {
+			if c.PayeeName == "Rewe" {
+				t.Fatalf("the held authorisation is offered the booked Rewe purchase %s", c.ID)
+			}
+		}
+	})
+}

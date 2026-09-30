@@ -1061,6 +1061,7 @@ func (s *Syncer) run() bool {
 
 		pol := s.matchPolicy(label)
 		pol.PayeeFrequency = payeeFrequency(rawTxns, pol.PayeePrefixes)
+		pol.Booked = s.state.Booked(acct.ID)
 
 		lo, hi := candidateWindow(dateFrom, rawTxns)
 		existing, err := s.ac.ListTransactions(ctx, account.ID, lo, hi)

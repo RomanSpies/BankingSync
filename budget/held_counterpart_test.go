@@ -143,3 +143,73 @@ func TestInterchangeable_aHeldAuthorisationNeverStandsInForARowOfTheSameFigures(
 		t.Fatal("a budget row and a held authorisation leave different budgets and must not count as interchangeable")
 	}
 }
+
+func bookedOnly(ids ...string) func(string) bool {
+	set := map[string]bool{}
+	for _, id := range ids {
+		set[id] = true
+	}
+	return func(id string) bool { return set[id] }
+}
+
+func authorisationOf(d time.Time, cents int64, payee string) ImportedFields {
+	in := imported(d, cents, payee, "")
+	in.Cleared = false
+	return in
+}
+
+func TestAssess_anAuthorisationNeverAdoptsARowAlreadyBooked(t *testing.T) {
+	d := day(2026, time.September, 30)
+	row := &Transaction{ID: "b1", AccountID: "a1", Date: d, AmountCents: -2143, PayeeName: "Edeka", Cleared: true}
+	pol := heldPolicy()
+	pol.Booked = bookedOnly("b1")
+
+	if got := Assess([]*Transaction{row}, authorisationOf(d.AddDate(0, 0, 1), -2143, "Edeka"), nil, pol); len(got) != 0 {
+		t.Fatalf("an authorisation was offered a row this program already booked: %+v", got)
+	}
+}
+
+func TestAssess_aBookingMayStillAdoptARowAlreadyBooked(t *testing.T) {
+	d := day(2026, time.September, 30)
+	row := &Transaction{ID: "b1", AccountID: "a1", Date: d, AmountCents: -2143, PayeeName: "Edeka", Cleared: true}
+	pol := heldPolicy()
+	pol.Booked = bookedOnly("b1")
+
+	if got := Assess([]*Transaction{row}, imported(d.AddDate(0, 0, 1), -2143, "Edeka", ""), nil, pol); len(got) != 1 {
+		t.Fatalf("a booking lost a booked candidate; the rule speaks only of authorisations")
+	}
+}
+
+func TestAssess_aClearedManualRowStaysAdoptableByAnAuthorisation(t *testing.T) {
+	d := day(2026, time.September, 30)
+	manual := &Transaction{ID: "m1", AccountID: "a1", Date: d, AmountCents: -2143, PayeeName: "Edeka", Cleared: true}
+	pol := heldPolicy()
+	pol.Booked = bookedOnly("someone-else")
+
+	if got := Assess([]*Transaction{manual}, authorisationOf(d, -2143, "Edeka"), nil, pol); len(got) != 1 {
+		t.Fatal("a row typed in by hand reads as cleared, and must stay adoptable by the bank's authorisation")
+	}
+}
+
+func TestReconcileBatch_anAuthorisationCreatedBesideItsBookedTwinIsANearMiss(t *testing.T) {
+	d := day(2026, time.September, 30)
+	twin := &Transaction{ID: "b1", AccountID: "a1", Date: d, AmountCents: -2143, PayeeName: "Edeka", Cleared: true}
+	s := &fakeStore{txns: []*Transaction{twin}}
+	pol := heldPolicy()
+	pol.Booked = bookedOnly("b1")
+	var reason string
+	var row *Transaction
+	pol.OnNearMiss = func(r string, c *Transaction) { reason, row = r, c }
+
+	out, err := ReconcileBatch(context.Background(), s, "a1",
+		[]ImportedFields{authorisationOf(d, -2143, "Edeka")}, nil, nil, pol)
+	if err != nil {
+		t.Fatalf("ReconcileBatch: %v", err)
+	}
+	if !out[0].Created || len(s.updates) != 0 {
+		t.Fatalf("outcome %s, updates %d; the authorisation must be created and the booked row left alone", out[0].Name(), len(s.updates))
+	}
+	if reason != "booked" || row != twin {
+		t.Fatalf("near miss %q on %v; an authorisation created beside a booked twin must be counted", reason, row)
+	}
+}
