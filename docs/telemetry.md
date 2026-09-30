@@ -232,8 +232,10 @@ Label values:
   `reference_model_agreed`, `fallback_key_model_agreed`. The `_model_agreed`
   variants carry `agreed` ∈ `yes`, `no` and say whether the matcher would have
   reached the same pairing on its own.
-- `outcome` on `match_reviews_total` ∈ `queued`, `assigned`, `imported`;
-  `reason` ∈ `ambiguous`, `uncertain` (when queued), `decided` (once answered).
+- `outcome` on `match_reviews_total` ∈ `queued`, `assigned`, `imported`,
+  `settled_by_booking`; `reason` ∈ `ambiguous`, `uncertain` (when queued),
+  `decided` (once answered), `automatic` (a held authorisation its booking
+  settled during a sync, with nobody asked).
   `ambiguous` means the arrangement had a free choice — the margin was under a
   bit; `uncertain` means the probability landed in the band.
 - `choice` ∈ `model_best`, `other_candidate`, `created_new`.
@@ -457,7 +459,7 @@ Every record the program can emit, by area:
 | `session` | `session.ended` (W) — the bank reported the account's session over (`reason` carries its code, e.g. `CLOSED_SESSION`); the account is skipped until it is renewed |
 | `import` | `import.batch.completed` (I) |
 | `transaction` / `transactions` | `transaction.parse.failed` (W), `transactions.dropped` (E) |
-| `match` | `match.held_for_review` (W), `match.near_miss` (W), `match.hold_failed` (E), `match.review_resolved` (I), `match.inquiry_raised` (I), `match.inquiry_answered` (I), `match.trial_watched` (I), `match.trial_promoted` (I), `match.trial_reverted` (I), `match.trial_dropped` (I), `match.decision_not_recorded` (W), `match.inquiry_not_recorded` (W), `match.usample_not_recorded` (W) |
+| `match` | `match.held_for_review` (W), `match.near_miss` (W), `match.hold_failed` (E), `match.review_resolved` (I), `match.review_settled_by_booking` (I), `match.inquiry_raised` (I), `match.inquiry_answered` (I), `match.trial_watched` (I), `match.trial_promoted` (I), `match.trial_reverted` (I), `match.trial_dropped` (I), `match.decision_not_recorded` (W), `match.inquiry_not_recorded` (W), `match.usample_not_recorded` (W) |
 | `review` | `review.refused` (W), `review.failed` (E) |
 | `balance` | `balance.no_usable_type` (W), `balance.moved_during_run` (W), `balance.unavailable` (E) |
 | `drift` | `drift.detected` (W), `drift.record_failed` (E), `drift.total_failed` (E) |
@@ -483,6 +485,11 @@ The ones a dashboard should care about:
 - **`match.trial_promoted`** is the other annotation source, and the one that
   explains a `param_version` change. It carries `param_version`, `previous`,
   `settled_decisions` and `shadow_differing`.
+- **`match.review_settled_by_booking`** is a held authorisation leaving the
+  queue because its booking arrived and was paired with it — by the sync when
+  the pairing cleared the automatic threshold (`reason=automatic`), or by a
+  person choosing it on the booking's review (`reason=decided`). One budget row
+  is written for the pair, dated like the authorisation.
 - **`match.review_resolved`** carries `choice`, which is the same signal as
   `bankingsync_match_review_choice_total` with the payee attached — useful for
   finding the actual transactions behind a rising `other_candidate` rate.

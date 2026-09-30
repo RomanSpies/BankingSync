@@ -326,13 +326,6 @@ func keyPayee(payee string, prefixes []string) string {
 
 // matchOutcome names what became of an incoming transaction, for the label on
 // the probability histogram.
-func matchOutcome(created bool) string {
-	if created {
-		return "created"
-	}
-	return "adopted"
-}
-
 // traceDecision writes one decision to a span of its own.
 //
 // A record rather than a timing: it is emitted once the decision has been made,
@@ -1185,7 +1178,8 @@ func (s *Syncer) run() bool {
 				s.traceDecision(matchCtx, tracer, label, d)
 			}
 
-			outs, err := budget.ReconcileBatch(matchCtx, s.ac, account.ID, fields, matchedThisRun, nil, traced)
+			heldAuth, heldByID := s.heldAuthorisationsOf(acct)
+			outs, err := budget.ReconcileBatch(matchCtx, s.ac, account.ID, fields, matchedThisRun, heldAuth, traced)
 			if err != nil {
 				matchSpan.RecordError(err)
 				matchSpan.SetStatus(codes.Error, "reconcile failed")
@@ -1226,13 +1220,20 @@ func (s *Syncer) run() bool {
 					continue
 				}
 				t, wasCreated := out.Transaction, out.Created
-				s.recordMatch(ctx, label, matchOutcome(wasCreated), pol.Version(), out)
+				s.recordMatch(ctx, label, out.Name(), pol.Version(), out)
 				matchedThisRun = append(matchedThisRun, t)
 				remember(t)
 
 				placed, touched := s.settle(ctx, label, acct, w, t, wasCreated)
 				if touched {
 					newlyTouched = append(newlyTouched, t)
+				}
+				if out.Counterpart != nil {
+					if auth, ok := heldByID[out.Counterpart.ID]; ok {
+						if err := s.retireCounterpart(ctx, acct, auth, t, false); err != nil {
+							log.Printf("[%s] %v", label, err)
+						}
+					}
 				}
 				switch placed {
 				case dispositionAdded:

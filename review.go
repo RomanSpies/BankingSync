@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -565,4 +566,92 @@ func (s *Syncer) recordReviewAnswer(r store.MatchReview, created bool, chosen *b
 			Weight:      chosen.Weight,
 			Probability: chosen.Probability,
 		})
+}
+
+const heldCandidatePrefix = "held:"
+
+func provisionalOf(r store.MatchReview) *budget.Transaction {
+	date, _ := time.Parse("2006-01-02", r.TxnDate)
+	return &budget.Transaction{
+		ID:            heldCandidatePrefix + strconv.FormatInt(r.ID, 10),
+		Date:          date,
+		AmountCents:   r.AmountCents,
+		Currency:      r.Currency,
+		PayeeName:     r.Payee,
+		Notes:         r.Notes,
+		ExternalRef:   r.ExternalRef,
+		ImportedPayee: r.ImportedPayee,
+		Provisional:   true,
+	}
+}
+
+func heldReviewID(candidateID string) (int64, bool) {
+	rest, ok := strings.CutPrefix(candidateID, heldCandidatePrefix)
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rest, 10, 64)
+	return id, err == nil
+}
+
+func (s *Syncer) heldAuthorisations(reviews []store.MatchReview, acct store.BankAccount) ([]*budget.Transaction, map[string]store.MatchReview) {
+	var rows []*budget.Transaction
+	byID := map[string]store.MatchReview{}
+	for _, r := range reviews {
+		if r.BankAccountID != acct.ID || r.Cleared || (r.Backend != "" && r.Backend != s.backendName) {
+			continue
+		}
+		t := provisionalOf(r)
+		rows = append(rows, t)
+		byID[t.ID] = r
+	}
+	return rows, byID
+}
+
+func (s *Syncer) heldAuthorisationsOf(acct store.BankAccount) ([]*budget.Transaction, map[string]store.MatchReview) {
+	reviews, err := s.st.GetMatchReviews()
+	if err != nil {
+		log.Printf("[%s] held authorisations could not be read, so none is offered to this batch: %v", bankLabel(acct), err)
+		return nil, nil
+	}
+	return s.heldAuthorisations(reviews, acct)
+}
+
+func (s *Syncer) retireCounterpart(
+	ctx context.Context, acct store.BankAccount, auth store.MatchReview, t *budget.Transaction, refute bool,
+) error {
+	label := bankLabel(acct)
+	s.recordBooked(ctx, label, acct, t.ID, auth.PendingKey, auth.ExternalRef)
+	if refute {
+		if err := s.st.SetMatchDecisionTruth(acct.ID, auth.PendingKey, false); err != nil {
+			log.Printf("[%s] could not record the outcome of a decision: %v", label, err)
+		} else if s.met != nil {
+			s.met.matchLabels.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("source", "review"),
+				attribute.String("bank", label)))
+		}
+	}
+	if err := s.st.DeleteMatchReview(auth.ID); err != nil {
+		return fmt.Errorf("the booking was imported, but clearing its authorisation from the queue failed: %w", err)
+	}
+	s.state.DeleteHeldKey(acct.ID, auth.PendingKey)
+
+	reason := "automatic"
+	if refute {
+		reason = "decided"
+	}
+	if s.met != nil {
+		s.met.matchReviews.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("outcome", "settled_by_booking"),
+			attribute.String("reason", reason),
+			attribute.String("bank", label),
+			attribute.String("backend", s.backendName)))
+	}
+	log.Printf("[%s] held authorisation %s %s settled by its booking (%s)", label,
+		centsToDecimal(auth.AmountCents), auth.Payee, reason)
+	olog.Info(ctx, "match.review_settled_by_booking",
+		logs.String("bank", label),
+		logs.String("reason", reason),
+		logs.String("payee", auth.Payee))
+	return nil
 }
