@@ -58,3 +58,49 @@ func TestSync_aConfirmedAuthorisationIsRecordedAsConsumed(t *testing.T) {
 		})
 	}
 }
+
+func TestSync_aPendingCarryingAnImportedReferenceLeavesTheBookedRowAlone(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(8))
+		h.reloadState(t)
+
+		h.eb.setPages([][]map[string]any{{bookedTxnPayee("r-1", daysAgo(3), "138.50", "VISA Hotel Berlin")}})
+		h.syncer.run()
+		h.eb.setPages([][]map[string]any{{pendingTxnPayee("r-1", daysAgo(4), "120.00", "Hotel Berlin")}})
+		h.syncer.run()
+
+		txns := h.actualTxns(t)
+		if len(txns) != 1 {
+			t.Fatalf("%d rows, want the booking alone", len(txns))
+		}
+		if txns[0].AmountCents != -13850 {
+			t.Fatalf("the booked row now reads %d cents; an authorisation delivered after its booking rewrote it", txns[0].AmountCents)
+		}
+	})
+}
+
+func TestSync_aReferencelessAuthorisationSeenAfterItsBookingIsNotImportedAgain(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(8))
+		h.reloadState(t)
+
+		pending := pendingTxnPayee("", daysAgo(5), "120.00", "Hotel Berlin")
+		booked := bookedTxnPayee("", daysAgo(3), "138.50", "VISA Hotel Berlin")
+		h.eb.setPages([][]map[string]any{{pending}})
+		h.syncer.run()
+		h.eb.setPages([][]map[string]any{{booked}})
+		h.syncer.run()
+		h.eb.setPages([][]map[string]any{{pending, booked}})
+		h.syncer.run()
+
+		txns := h.actualTxns(t)
+		if len(txns) != 1 {
+			t.Fatalf("%d rows, want one: the authorisation was already settled by its booking", len(txns))
+		}
+		if txns[0].AmountCents != -13850 {
+			t.Fatalf("the booked row now reads %d cents; the stale authorisation rewrote it", txns[0].AmountCents)
+		}
+	})
+}

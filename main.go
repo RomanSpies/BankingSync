@@ -1321,6 +1321,15 @@ func (s *Syncer) run() bool {
 			booked.Cleared = true
 
 			if txnStatus == "PDNG" {
+				if s.alreadyBooked(acct.ID, ref, pendingKey, legacyKey) {
+					if t := knownByRef[ref]; ref != "" && t != nil {
+						matchedThisRun = append(matchedThisRun, t)
+					}
+					log.Printf("[%s] Authorisation %s already settled by its booking, skipped", label, pendingKey)
+					skipped++
+					acctSkipped++
+					continue
+				}
 				if _, _, exists := s.pendingEntry(acct.ID, pendingKey, legacyKey); !exists {
 					work = append(work, modelWork{
 						kind: workPending, fields: pending,
@@ -1905,6 +1914,15 @@ func (s *Syncer) settle(
 		s.recordBooked(ctx, label, acct, t.ID, "", w.ref)
 		return dispositionSkipped, false
 	}
+}
+
+func (s *Syncer) alreadyBooked(acctID int64, ref, pendingKey, legacyKey string) bool {
+	if ref != "" {
+		if _, done := s.state.Imported(acctID)[ref]; done {
+			return true
+		}
+	}
+	return s.state.Consumed(acctID, pendingKey) || s.state.Consumed(acctID, legacyKey)
 }
 
 func (s *Syncer) consumePending(ctx context.Context, label string, acct store.BankAccount, pendingKey, txnID, ref string) {
