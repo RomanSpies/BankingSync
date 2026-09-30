@@ -151,6 +151,13 @@ func (s *Store) migrate() error {
 			txn_id          TEXT NOT NULL,
 			PRIMARY KEY (bank_account_id, key)
 		);
+		CREATE TABLE IF NOT EXISTS booking_identities (
+			bank_account_id INTEGER NOT NULL,
+			identity        TEXT NOT NULL,
+			txn_id          TEXT NOT NULL,
+			recorded_at     TEXT NOT NULL DEFAULT (datetime('now')),
+			PRIMARY KEY (bank_account_id, identity)
+		);
 		CREATE TABLE IF NOT EXISTS booked_rows (
 			bank_account_id INTEGER NOT NULL,
 			txn_id          TEXT NOT NULL,
@@ -251,6 +258,7 @@ func (s *Store) migrate() error {
 			best_amount_level TEXT NOT NULL DEFAULT '',
 			best_date_level   TEXT NOT NULL DEFAULT '',
 			created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+			identity          TEXT NOT NULL DEFAULT '',
 			UNIQUE (bank_account_id, pending_key)
 		);
 	`)
@@ -278,6 +286,7 @@ func (s *Store) migrate() error {
 		`ALTER TABLE bank_accounts ADD COLUMN drift_checked_at TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE match_decisions ADD COLUMN shadow_version TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE match_decisions ADD COLUMN shadow_outcome TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE match_reviews ADD COLUMN identity TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE level_observations RENAME COLUMN param_version TO classification`,
 	} {
 		_, _ = s.db.Exec(stmt)
@@ -683,6 +692,7 @@ func (s *Store) RemoveBankAccount(id int64) error {
 		"DELETE FROM imported_refs WHERE bank_account_id = ?",
 		"DELETE FROM pending_map WHERE bank_account_id = ?",
 		"DELETE FROM booked_rows WHERE bank_account_id = ?",
+		"DELETE FROM booking_identities WHERE bank_account_id = ?",
 		// Held transactions go with the account for the same reason the other
 		// two do: they name a budget account that is no longer being synced, so
 		// nothing can be merged into it and nothing can be imported to it. Left
@@ -747,6 +757,9 @@ func (s *Store) ResetImportState() (int64, int64, error) {
 	}
 	if _, err := tx.Exec(`DELETE FROM booked_rows`); err != nil {
 		return 0, 0, fmt.Errorf("purge booked_rows: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM booking_identities`); err != nil {
+		return 0, 0, fmt.Errorf("purge booking_identities: %w", err)
 	}
 	if _, err := tx.Exec(`UPDATE bank_accounts SET last_sync_date = ''`); err != nil {
 		return 0, 0, fmt.Errorf("reset account watermarks: %w", err)
@@ -875,6 +888,47 @@ func (s *Store) AddBookedRow(bankAccountID int64, txnID, pendingKey string) erro
 		bankAccountID, txnID, pendingKey,
 	)
 	return err
+}
+
+func (s *Store) AddBookingIdentity(bankAccountID int64, identity, txnID string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO booking_identities (bank_account_id, identity, txn_id) VALUES (?, ?, ?)
+		 ON CONFLICT(bank_account_id, identity) DO UPDATE SET
+		   txn_id = excluded.txn_id, recorded_at = excluded.recorded_at`,
+		bankAccountID, identity, txnID,
+	)
+	return err
+}
+
+func (s *Store) AllBookingIdentities() (map[int64]map[string]string, error) {
+	rows, err := s.db.Query("SELECT bank_account_id, identity, txn_id FROM booking_identities")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	m := make(map[int64]map[string]string)
+	for rows.Next() {
+		var acct int64
+		var identity, id string
+		if err := rows.Scan(&acct, &identity, &id); err != nil {
+			return nil, err
+		}
+		if m[acct] == nil {
+			m[acct] = make(map[string]string)
+		}
+		m[acct][identity] = id
+	}
+	return m, rows.Err()
+}
+
+func (s *Store) PruneBookingIdentities() (map[int64]map[string]string, error) {
+	if _, err := s.db.Exec(
+		"DELETE FROM booking_identities WHERE recorded_at < datetime('now', ?)",
+		fmt.Sprintf("-%d days", RetentionDays),
+	); err != nil {
+		return nil, err
+	}
+	return s.AllBookingIdentities()
 }
 
 func (s *Store) AllBookedRows() (map[int64]map[string]string, error) {
@@ -1089,6 +1143,7 @@ type MatchReview struct {
 	BestAmountLevel  string
 	BestDateLevel    string
 	CreatedAt        string
+	Identity         string
 }
 
 // AddMatchReview records a held transaction. A second sync offering the same one
@@ -1099,13 +1154,13 @@ func (s *Store) AddMatchReview(r MatchReview) error {
 			bank_account_id, backend, external_ref, pending_key, txn_date,
 			amount_cents, currency, payee, notes, imported_payee,
 			counterparty_iban, sepa_eref, sepa_mref, sepa_cred, cleared,
-			best_probability, best_payee_level, best_amount_level, best_date_level
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			best_probability, best_payee_level, best_amount_level, best_date_level, identity
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT (bank_account_id, pending_key) DO NOTHING`,
 		r.BankAccountID, r.Backend, r.ExternalRef, r.PendingKey, r.TxnDate,
 		r.AmountCents, r.Currency, r.Payee, r.Notes, r.ImportedPayee,
 		r.CounterpartyIBAN, r.SEPAEndToEnd, r.SEPAMandate, r.SEPACreditorID, boolToInt(r.Cleared),
-		r.BestProbability, r.BestPayeeLevel, r.BestAmountLevel, r.BestDateLevel)
+		r.BestProbability, r.BestPayeeLevel, r.BestAmountLevel, r.BestDateLevel, r.Identity)
 	return err
 }
 
@@ -1116,7 +1171,7 @@ func (s *Store) GetMatchReviews() ([]MatchReview, error) {
 		       amount_cents, currency, payee, notes, imported_payee,
 		       counterparty_iban, sepa_eref, sepa_mref, sepa_cred, cleared,
 		       best_probability, best_payee_level, best_amount_level, best_date_level,
-		       created_at
+		       created_at, identity
 		FROM match_reviews ORDER BY txn_date, id`)
 	if err != nil {
 		return nil, err
@@ -1131,7 +1186,7 @@ func (s *Store) GetMatchReviews() ([]MatchReview, error) {
 			&r.TxnDate, &r.AmountCents, &r.Currency, &r.Payee, &r.Notes, &r.ImportedPayee,
 			&r.CounterpartyIBAN, &r.SEPAEndToEnd, &r.SEPAMandate, &r.SEPACreditorID, &cleared,
 			&r.BestProbability, &r.BestPayeeLevel, &r.BestAmountLevel, &r.BestDateLevel,
-			&r.CreatedAt); err != nil {
+			&r.CreatedAt, &r.Identity); err != nil {
 			return nil, err
 		}
 		r.Cleared = cleared != 0

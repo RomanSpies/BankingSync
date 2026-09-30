@@ -1990,3 +1990,54 @@ func TestStore_aResolutionRecordsTheCandidateCountItWasScoredWith(t *testing.T) 
 		t.Fatalf("candidates %d; the refit weighs the chosen pair's levels with the count they were scored under, 2", got)
 	}
 }
+
+func TestStore_removingAnAccountForgetsItsBookingIdentities(t *testing.T) {
+	st := openTestStore(t)
+	keep, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s1", AccountUID: "uid-a", BankName: "A", BankCountry: "DE", ActualAccount: "Checking", SessionExpiry: "2027-01-01T00:00:00Z"})
+	drop, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s2", AccountUID: "uid-b", BankName: "B", BankCountry: "DE", ActualAccount: "Savings", SessionExpiry: "2027-01-01T00:00:00Z"})
+	_ = st.AddBookingIdentity(keep, "k", "row-keep")
+	_ = st.AddBookingIdentity(drop, "d", "row-drop")
+
+	if err := st.RemoveBankAccount(drop); err != nil {
+		t.Fatalf("RemoveBankAccount: %v", err)
+	}
+
+	got, _ := st.AllBookingIdentities()
+	if len(got[drop]) != 0 {
+		t.Errorf("a removed account left booking identities behind: %v", got[drop])
+	}
+	if got[keep]["k"] != "row-keep" {
+		t.Error("removing one account must not forget another account's booking identities")
+	}
+}
+
+func TestStore_resettingTheImportStateForgetsBookingIdentities(t *testing.T) {
+	st := openTestStore(t)
+	_ = st.AddBookingIdentity(1, "k", "row")
+
+	if _, _, err := st.ResetImportState(); err != nil {
+		t.Fatalf("ResetImportState: %v", err)
+	}
+
+	if got, _ := st.AllBookingIdentities(); len(got) != 0 {
+		t.Fatalf("a reset declares nothing imported, yet booking identities survived: %v", got)
+	}
+}
+
+func TestStore_aHeldTransactionKeepsItsIdentity(t *testing.T) {
+	st := openTestStore(t)
+	if err := st.AddMatchReview(store.MatchReview{
+		BankAccountID: 1, PendingKey: "k-1", TxnDate: "2026-09-30", AmountCents: -350,
+		Currency: "EUR", Payee: "Cafe Sonne", Cleared: true, Identity: "2026-09-30|abcd|1",
+	}); err != nil {
+		t.Fatalf("AddMatchReview: %v", err)
+	}
+
+	reviews, err := st.GetMatchReviews()
+	if err != nil || len(reviews) != 1 {
+		t.Fatalf("GetMatchReviews: %v, %d rows", err, len(reviews))
+	}
+	if got := reviews[0].Identity; got != "2026-09-30|abcd|1" {
+		t.Fatalf("identity %q; a booking released from review must still be recognised when the bank delivers it again", got)
+	}
+}
