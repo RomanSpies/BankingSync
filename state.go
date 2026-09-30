@@ -29,6 +29,8 @@ type State struct {
 	HeldKeys map[int64]map[string]bool
 
 	BookedRows map[int64]map[string]string
+
+	Identities map[int64]map[string]string
 }
 
 func (s *State) Pending(bankAccountID int64) map[string]string {
@@ -94,6 +96,11 @@ func LoadFromStore(st *store.Store) (*State, error) {
 	s.BookedRows, err = st.AllBookedRows()
 	if err != nil {
 		return nil, fmt.Errorf("load booked rows: %w", err)
+	}
+
+	s.Identities, err = st.AllBookingIdentities()
+	if err != nil {
+		return nil, fmt.Errorf("load booking identities: %w", err)
 	}
 
 	return s, nil
@@ -321,5 +328,33 @@ func (s *State) ReloadHeld(st *store.Store) error {
 		return err
 	}
 	s.HeldKeys = held
+	return nil
+}
+
+func (s *State) RecordIdentity(bankAccountID int64, identity, txnID string, st *store.Store) error {
+	if s.Identities == nil {
+		s.Identities = make(map[int64]map[string]string)
+	}
+	if s.Identities[bankAccountID] == nil {
+		s.Identities[bankAccountID] = make(map[string]string)
+	}
+	s.Identities[bankAccountID][identity] = txnID
+	return st.AddBookingIdentity(bankAccountID, identity, txnID)
+}
+
+func (s *State) BookedUnder(bankAccountID int64, identity string) (string, bool) {
+	if identity == "" {
+		return "", false
+	}
+	txnID, ok := s.Identities[bankAccountID][identity]
+	return txnID, ok
+}
+
+func (s *State) PruneBookingIdentities(st *store.Store) error {
+	updated, err := st.PruneBookingIdentities()
+	if err != nil {
+		return err
+	}
+	s.Identities = updated
 	return nil
 }

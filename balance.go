@@ -706,6 +706,7 @@ func (s *Syncer) holdForReview(
 		BestPayeeLevel:   best.Comparison.Payee.String(),
 		BestAmountLevel:  best.Comparison.Amount.String(),
 		BestDateLevel:    best.Comparison.Date.String(),
+		Identity:         in.Identity,
 	}
 	if err := s.st.AddMatchReview(r); err != nil {
 		// Recording it failed, so nothing is holding the transaction back and the

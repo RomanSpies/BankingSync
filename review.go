@@ -330,6 +330,7 @@ func (s *Syncer) releaseHeld(
 		}
 	}
 	if r.Cleared {
+		s.recordIdentity(ctx, bankLabel(acct), acct, r.Identity, t.ID, r.ExternalRef)
 		if key, ok := s.state.FindPendingKeyByTxnID(r.BankAccountID, t.ID); ok && !created {
 			s.consumePending(ctx, bankLabel(acct), acct, key, t.ID, r.ExternalRef)
 		} else {
@@ -411,6 +412,7 @@ func importedFieldsOf(r store.MatchReview) budget.ImportedFields {
 		ExternalRef:      r.ExternalRef,
 		ImportedPayee:    r.ImportedPayee,
 		Cleared:          r.Cleared,
+		Identity:         r.Identity,
 		CounterpartyIBAN: r.CounterpartyIBAN,
 		SEPA: budget.SEPARefs{
 			EndToEnd:   r.SEPAEndToEnd,

@@ -50,6 +50,7 @@ type ImportedFields struct {
 	ExternalRef   string
 	ImportedPayee string
 	Cleared       bool
+	Identity      string
 
 	// CounterpartyIBAN is the other side's account. When it resolves to an
 	// asset account the user already holds, the transaction is a transfer

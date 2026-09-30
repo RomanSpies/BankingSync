@@ -879,6 +879,9 @@ func (s *Syncer) run() bool {
 	if err := s.state.PruneBookedRows(s.st); err != nil {
 		log.Printf("Prune booked rows: %v", err)
 	}
+	if err := s.state.PruneBookingIdentities(s.st); err != nil {
+		log.Printf("Prune booking identities: %v", err)
+	}
 	// Both of these had retention policies written down and no caller. A held
 	// transaction past the window describes an import the bank will not offer
 	// again, and a decision past it describes one nobody can check any more.
@@ -1132,6 +1135,7 @@ func (s *Syncer) run() bool {
 
 		txnKeys, keyCollisions := importKeys(rawTxns, pol.PayeePrefixes)
 		listed := listedPendingKeys(rawTxns, txnKeys)
+		identities := txnIdentities(rawTxns)
 		if keyCollisions > 0 {
 			log.Printf("[%s] %d transaction(s) would have shared an identity under the "+
 				"pre-v3 import key and been dropped", label, keyCollisions)
@@ -1344,6 +1348,7 @@ func (s *Syncer) run() bool {
 			}
 			booked := pending
 			booked.Cleared = true
+			booked.Identity = identities[txnIndex]
 
 			if txnStatus == "PDNG" {
 				if s.alreadyBooked(acct.ID, ref, pendingKey, legacyKey) {
@@ -1387,6 +1392,11 @@ func (s *Syncer) run() bool {
 						continue
 					}
 				}
+				if ref != "" {
+					if _, seen := s.state.BookedUnder(acct.ID, booked.Identity); seen {
+						s.countReferenceChanged(ctx, label)
+					}
+				}
 
 				matchedKey, pendingVal, inPending := s.pendingEntry(acct.ID, pendingKey, legacyKey)
 				if inPending && listed[matchedKey] {
@@ -1421,6 +1431,7 @@ func (s *Syncer) run() bool {
 						matchedThisRun = append(matchedThisRun, existingTxn)
 						newlyTouched = append(newlyTouched, existingTxn)
 						s.consumePending(ctx, label, acct, matchedKey, existingTxn.ID, ref)
+						s.recordIdentity(ctx, label, acct, booked.Identity, existingTxn.ID, ref)
 						if ref != "" {
 							if err := s.state.AddImportedRef(acct.ID, ref, date.Format("2006-01-02"), s.st); err != nil {
 								bookkeepingFailed(ctx, "AddImportedRef", label, ref, err)
@@ -1923,6 +1934,7 @@ func (s *Syncer) settle(
 
 	case workStalePending:
 		s.consumePending(ctx, label, acct, w.matchedKey, t.ID, w.ref)
+		s.recordIdentity(ctx, label, acct, w.fields.Identity, t.ID, w.ref)
 		rememberRef()
 		if wasCreated {
 			return dispositionAdded, true
@@ -1933,6 +1945,7 @@ func (s *Syncer) settle(
 
 	default:
 		rememberRef()
+		s.recordIdentity(ctx, label, acct, w.fields.Identity, t.ID, w.ref)
 		if wasCreated {
 			s.recordBooked(ctx, label, acct, t.ID, "", w.ref)
 			return dispositionAdded, true
@@ -1977,6 +1990,34 @@ func (s *Syncer) consumePending(ctx context.Context, label string, acct store.Ba
 		bookkeepingFailed(ctx, "DeletePending", label, ref, err)
 	}
 	s.recordBooked(ctx, label, acct, txnID, pendingKey, ref)
+}
+
+func (s *Syncer) recordIdentity(ctx context.Context, label string, acct store.BankAccount, identity, txnID, ref string) {
+	if identity == "" {
+		return
+	}
+	if err := s.state.RecordIdentity(acct.ID, identity, txnID, s.st); err != nil {
+		bookkeepingFailed(ctx, "RecordIdentity", label, ref, err)
+	}
+}
+
+func (s *Syncer) countReferenceChanged(ctx context.Context, label string) {
+	if s.met != nil && s.met.referenceChanged != nil {
+		s.met.referenceChanged.Add(ctx, 1, metric.WithAttributes(attribute.String("bank", label)))
+	}
+}
+
+func txnIdentities(txns []enablebanking.Transaction) []string {
+	out := make([]string, len(txns))
+	seen := map[string]int{}
+	for i, t := range txns {
+		if t.ContentKey == "" {
+			continue
+		}
+		seen[t.ContentKey]++
+		out[i] = fmt.Sprintf("%s|%d", t.ContentKey, seen[t.ContentKey])
+	}
+	return out
 }
 
 func (s *Syncer) recordBooked(ctx context.Context, label string, acct store.BankAccount, txnID, pendingKey, ref string) {

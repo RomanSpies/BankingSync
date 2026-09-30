@@ -226,6 +226,7 @@ and a dashboard should say so in a panel description rather than imply freshness
 | `bankingsync_match_multiplicity_total` | counter | `bank`, `backend` | Transactions settled onto one of several rows nothing could tell apart. |
 | `bankingsync_near_miss_total` | counter | `bank`, `backend`, `reason` | Transactions created although an open row nearly matched. |
 | `bankingsync_listed_pending_twins_total` | counter | `bank` | Bookings kept apart from an authorisation of the same key because the bank still lists that authorisation as pending in the same feed. A bank that briefly lists both halves of one purchase shows up here as a steady rate, and each tick is an uncleared twin left in the budget. |
+| `bankingsync_reference_changed_total` | counter | `bank` | Bookings arriving under a bank reference not seen before whose bank record — everything except `transaction_id` — was already imported under another one. This is Enable Banking's warning that `transaction_id` may change when the list is retrieved again, measured: any rate above zero means the bank's references cannot identify its transactions. |
 | `bankingsync_reference_source_total` | counter | `bank`, `status`, `source` | Fetched transactions by the field their bank reference was taken from. Counted per fetched record per run, so a re-delivered transaction counts again; the ratio between sources is what matters. |
 
 Label values:
