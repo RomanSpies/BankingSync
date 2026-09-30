@@ -3,7 +3,9 @@ package enablebanking
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -41,15 +43,25 @@ type Transaction struct {
 	Status string
 	Date   time.Time
 
-	AmountCents int64
-	Currency    string
-	Payee       string
-	Notes       string
-	EntryRef    string
+	AmountCents   int64
+	Currency      string
+	Payee         string
+	KeyPayee      string
+	Notes         string
+	EntryRef      string
+	TransactionID string
+	RefSource     string
+	ContentKey    string
 
 	CounterpartyIBAN string
 	SEPA             SEPARefs
 }
+
+const (
+	RefSourceEntryReference = "entry_reference"
+	RefSourceTransactionID  = "transaction_id"
+	RefSourceNone           = "none"
+)
 
 // Client is an Enable Banking API client that fetches transactions using JWT
 // authentication signed with an RSA private key.
@@ -273,24 +285,51 @@ func (c *Client) parseTransaction(t map[string]any) (Transaction, error) {
 	if err != nil {
 		return Transaction{}, fmt.Errorf("parseAmount: %w", err)
 	}
-	payee := c.parsePayee(t)
 	notes, sepa := parseNotesAndSEPA(t)
 	ref := getEntryRef(t)
-	status, _ := t["status"].(string)
-	if status == "" {
-		status = "BOOK"
+	status := parseStatus(t)
+	var content string
+	if status != "PDNG" {
+		content = contentKey(t, date)
 	}
 	return Transaction{
 		Status:           status,
 		Date:             date,
 		AmountCents:      amountCents,
 		Currency:         parseCurrency(t),
-		Payee:            payee,
+		Payee:            c.parsePayee(t),
+		KeyPayee:         c.parseKeyPayee(t),
 		Notes:            notes,
 		EntryRef:         ref,
+		TransactionID:    transactionID(t),
+		RefSource:        refSource(t),
+		ContentKey:       content,
 		CounterpartyIBAN: parseCounterpartyIBAN(t),
 		SEPA:             sepa,
 	}, nil
+}
+
+func parseStatus(t map[string]any) string {
+	switch status, _ := t["status"].(string); status {
+	case "":
+		return "BOOK"
+	case "HOLD":
+		return "PDNG"
+	default:
+		return status
+	}
+}
+
+func (t Transaction) Importable() bool {
+	switch t.Status {
+	case "SCHD", "CNCL", "RJCT":
+		return false
+	}
+	return true
+}
+
+func (t Transaction) Withdrawn() bool {
+	return t.Status == "CNCL" || t.Status == "RJCT"
 }
 
 func parseCurrency(t map[string]any) string {
@@ -385,35 +424,42 @@ func transactionIsDebit(t map[string]any) bool {
 }
 
 func (c *Client) parsePayee(t map[string]any) string {
-	var name string
-	if transactionIsDebit(t) {
+	return c.payee(t, stripSEPAPrefixes)
+}
 
-		if cred, ok := t["creditor"].(map[string]any); ok {
-			name, _ = cred["name"].(string)
-		}
-		if name == "" {
-			name, _ = t["creditor_name"].(string)
-		}
+func (c *Client) parseKeyPayee(t map[string]any) string {
+	return c.payee(t, stripSEPATags)
+}
 
-		if name == "" {
-			name = firstRemittanceLine(t)
-		}
-	} else {
-
-		if deb, ok := t["debtor"].(map[string]any); ok {
-			name, _ = deb["name"].(string)
-		}
-		if name == "" {
-			name, _ = t["debtor_name"].(string)
-		}
-
-		if name == "" || c.isOwnName(name) {
-			name = firstRemittanceLine(t)
-		}
+func (c *Client) payee(t map[string]any, clean func(string) string) string {
+	name := c.counterpartyName(t)
+	if name == "" {
+		name = clean(firstRemittanceLine(t))
 	}
 	if name == "" {
 		return "Unknown"
 	}
+	return name
+}
+
+func (c *Client) counterpartyName(t map[string]any) string {
+	if transactionIsDebit(t) {
+		return partyName(t, "creditor")
+	}
+	name := partyName(t, "debtor")
+	if c.isOwnName(name) {
+		return ""
+	}
+	return name
+}
+
+func partyName(t map[string]any, side string) string {
+	if party, ok := t[side].(map[string]any); ok {
+		if name, _ := party["name"].(string); name != "" {
+			return name
+		}
+	}
+	name, _ := t[side+"_name"].(string)
 	return name
 }
 
@@ -429,10 +475,72 @@ func parseNotesAndSEPA(t map[string]any) (string, SEPARefs) {
 	return joinRemittanceAndSEPA(t)
 }
 
-func getEntryRef(t map[string]any) string {
-	if v, ok := t["entry_reference"].(string); ok && v != "" {
+func contentKey(t map[string]any, date time.Time) string {
+	record := make(map[string]any, len(t))
+	for k, v := range t {
+		if k != "transaction_id" {
+			record[k] = v
+		}
+	}
+	canonical, err := json.Marshal(withoutNulls(record))
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(canonical)
+	return reachDate(t, date).Format("2006-01-02") + "|" + hex.EncodeToString(sum[:8])
+}
+
+func withoutNulls(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			if e != nil {
+				out[k] = withoutNulls(e)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = withoutNulls(e)
+		}
+		return out
+	default:
 		return v
 	}
+}
+
+func reachDate(t map[string]any, fallback time.Time) time.Time {
+	latest := fallback
+	for _, field := range []string{"transaction_date", "booking_date", "value_date"} {
+		raw, _ := t[field].(string)
+		if len(raw) >= 10 {
+			raw = raw[:10]
+		}
+		if d, err := time.Parse("2006-01-02", raw); err == nil && d.After(latest) {
+			latest = d
+		}
+	}
+	return latest
+}
+
+func refSource(t map[string]any) string {
+	if v, ok := t["entry_reference"].(string); ok && v != "" {
+		return RefSourceEntryReference
+	}
+	if v, ok := t["transaction_id"].(string); ok && v != "" {
+		return RefSourceTransactionID
+	}
+	return RefSourceNone
+}
+
+func getEntryRef(t map[string]any) string {
+	v, _ := t["entry_reference"].(string)
+	return v
+}
+
+func transactionID(t map[string]any) string {
 	v, _ := t["transaction_id"].(string)
 	return v
 }
@@ -451,10 +559,10 @@ func firstRemittanceLine(t map[string]any) string {
 	case []any:
 		if len(v) > 0 {
 			s, _ := v[0].(string)
-			return stripSEPAPrefixes(s)
+			return s
 		}
 	case string:
-		return stripSEPAPrefixes(v)
+		return v
 	}
 	return ""
 }

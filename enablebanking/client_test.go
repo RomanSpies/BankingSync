@@ -394,11 +394,10 @@ func TestGetEntryRef_entryReference(t *testing.T) {
 	}
 }
 
-func TestGetEntryRef_fallbackToTransactionID(t *testing.T) {
+func TestGetEntryRef_neverFallsBackToTransactionID(t *testing.T) {
 	raw := map[string]any{"transaction_id": "TXN-002"}
-	got := getEntryRef(raw)
-	if got != "TXN-002" {
-		t.Errorf("got %q, want TXN-002", got)
+	if got := getEntryRef(raw); got != "" {
+		t.Errorf("got %q; Enable Banking documents transaction_id as liable to change between retrievals, so it cannot be a reference", got)
 	}
 }
 
@@ -618,6 +617,36 @@ func TestParseDate_takesTheStatedDayNotTheInstant(t *testing.T) {
 		if got.Location() != time.UTC {
 			t.Errorf("%s (%q): anchored in %s, want UTC — a non-UTC anchor makes "+
 				"dateToInt read a different calendar day", name, raw, got.Location())
+		}
+	}
+}
+
+func TestParseTransaction_treatsAnAccountHoldAsPending(t *testing.T) {
+	got, err := newTestClient().parseTransaction(map[string]any{
+		"transaction_date":       "2026-09-10",
+		"transaction_amount":     map[string]any{"amount": "150.00", "currency": "EUR"},
+		"credit_debit_indicator": "DBIT",
+		"status":                 "HOLD",
+		"creditor":               map[string]any{"name": "Autovermietung"},
+	})
+	if err != nil {
+		t.Fatalf("parseTransaction: %v", err)
+	}
+	if got.Status != "PDNG" {
+		t.Errorf("Status: got %q, want PDNG — an account hold is an authorisation", got.Status)
+	}
+	if got.ContentKey != "" {
+		t.Errorf("ContentKey: got %q, want none — an authorisation has no booking identity", got.ContentKey)
+	}
+}
+
+func TestTransaction_importableRejectsScheduledCancelledAndRejected(t *testing.T) {
+	for status, want := range map[string]bool{
+		"BOOK": true, "PDNG": true, "OTHR": true, "": true,
+		"SCHD": false, "CNCL": false, "RJCT": false,
+	} {
+		if got := (Transaction{Status: status}).Importable(); got != want {
+			t.Errorf("Importable(%q) = %v, want %v", status, got, want)
 		}
 	}
 }

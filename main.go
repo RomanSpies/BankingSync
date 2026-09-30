@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -291,7 +292,7 @@ func importKeys(txns []enablebanking.Transaction, prefixes []string) (keys []str
 		}
 
 		base := fmt.Sprintf("%s|%s|%s", t.Date.Format("2006-01-02"),
-			centsToDecimal(t.AmountCents), keyPayee(t.Payee, prefixes))
+			centsToDecimal(t.AmountCents), keyPayee(t.KeyPayee, prefixes))
 		// Counted per status but not keyed by it. Counting them together would
 		// hand a booking the index after its own authorisation; keying by status
 		// would stop the two ever meeting in the pending map, which is what lets
@@ -309,6 +310,107 @@ func importKeys(txns []enablebanking.Transaction, prefixes []string) (keys []str
 // this key, and its booking now computes a different one — without the fallback
 // the authorisation would go unrecognised and be imported a second time. The
 // scheme disappears on its own once the retention window has passed over it.
+func listedPendingKeys(txns []enablebanking.Transaction, keys []string) map[string]bool {
+	listed := map[string]bool{}
+	for i, t := range txns {
+		if t.Status != "PDNG" || t.EntryRef != "" {
+			continue
+		}
+		listed[keys[i]] = true
+		listed[legacyImportKey(t.Date, t.AmountCents)] = true
+	}
+	return listed
+}
+
+func splitImportable(txns []enablebanking.Transaction) (kept, excluded []enablebanking.Transaction) {
+	kept = make([]enablebanking.Transaction, 0, len(txns))
+	for _, t := range txns {
+		if t.Importable() {
+			kept = append(kept, t)
+		} else {
+			excluded = append(excluded, t)
+		}
+	}
+	return kept, excluded
+}
+
+func (s *Syncer) countExcluded(ctx context.Context, label string, excluded []enablebanking.Transaction) {
+	if len(excluded) > 0 {
+		log.Printf("[%s] %d transaction(s) left out because the bank has not booked them", label, len(excluded))
+	}
+	if s.met == nil || s.met.txExcluded == nil {
+		return
+	}
+	for _, t := range excluded {
+		s.met.txExcluded.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("bank", label),
+			attribute.String("status", t.Status)))
+	}
+}
+
+func (s *Syncer) releaseWithdrawn(ctx context.Context, label string, acct store.BankAccount, live, excluded []enablebanking.Transaction) {
+	withdrawn := slices.DeleteFunc(slices.Clone(excluded), func(t enablebanking.Transaction) bool { return !t.Withdrawn() })
+	if len(withdrawn) == 0 {
+		return
+	}
+	prefixes := s.st.Tunables().PayeePrefixes
+	byOrder := func(a, b enablebanking.Transaction) int {
+		switch {
+		case lessTxn(a, b):
+			return -1
+		case lessTxn(b, a):
+			return 1
+		}
+		return 0
+	}
+	live = slices.Clone(live)
+	slices.SortStableFunc(live, byOrder)
+	slices.SortStableFunc(withdrawn, byOrder)
+	liveKeys, _ := importKeys(live, prefixes)
+	listed := listedPendingKeys(live, liveKeys)
+	for _, k := range liveKeys {
+		listed[k] = true
+	}
+	keys, _ := importKeys(withdrawn, prefixes)
+	for i, t := range withdrawn {
+		legacyRef := ""
+		if t.EntryRef == "" {
+			legacyRef = t.TransactionID
+		}
+		key, val, ok := s.pendingOrLegacyEntry(acct.ID, keys[i], "", legacyRef)
+		if !ok || listed[key] {
+			continue
+		}
+		if err := s.state.DeletePending(acct.ID, key, s.st); err != nil {
+			bookkeepingFailed(ctx, "release withdrawn authorisation", label, t.EntryRef, err)
+			continue
+		}
+		rowID, _ := splitPendingVal(val)
+		log.Printf("[%s] Authorisation %s | %s | %s was withdrawn by the bank (%s): "+
+			"its uncleared row %s stays in the budget and has to be deleted by hand",
+			label, t.Date.Format("2006-01-02"), centsToDecimal(t.AmountCents), t.Payee, t.Status, rowID)
+		olog.Warn(ctx, "sync.authorisation_cancelled",
+			logs.String("bank", label),
+			logs.String("status", t.Status),
+			logs.String("date", t.Date.Format("2006-01-02")),
+			logs.String("amount", centsToDecimal(t.AmountCents)),
+			logs.String("payee", t.Payee),
+			logs.String("row_id", rowID))
+		if s.met != nil && s.met.withdrawn != nil {
+			s.met.withdrawn.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("bank", label),
+				attribute.String("status", t.Status)))
+		}
+	}
+}
+
+func (s *Syncer) countListedPendingTwin(ctx context.Context, label, key string) {
+	log.Printf("[%s] Booking %s left apart from the authorisation of the same key, which the bank still lists as pending", label, key)
+	if s.met != nil && s.met.listedPendingTwins != nil {
+		s.met.listedPendingTwins.Add(ctx, 1, metric.WithAttributes(attribute.String("bank", label)))
+	}
+}
+
 func legacyImportKey(date time.Time, amountCents int64) string {
 	return fmt.Sprintf("%s|%s", date.Format("2006-01-02"), centsToDecimal(amountCents))
 }
@@ -326,13 +428,6 @@ func keyPayee(payee string, prefixes []string) string {
 
 // matchOutcome names what became of an incoming transaction, for the label on
 // the probability histogram.
-func matchOutcome(created bool) string {
-	if created {
-		return "created"
-	}
-	return "adopted"
-}
-
 // traceDecision writes one decision to a span of its own.
 //
 // A record rather than a timing: it is emitted once the decision has been made,
@@ -766,6 +861,7 @@ func (s *Syncer) run() bool {
 	status := "success"
 	syncMessage := ""
 	added, updated, skipped := 0, 0, 0
+	skippedBy := map[string]int{}
 	// Two different things, deliberately not one counter. A dropped transaction is
 	// one Enable Banking sent that could not be parsed, which is a defect worth an
 	// email. A zero-amount row is one bankingsync declines on purpose, and at banks
@@ -774,6 +870,7 @@ func (s *Syncer) run() bool {
 	// failure that never happened.
 	totalDropped := 0
 	zeroAmount := 0
+	excluded := 0
 	held := 0
 	var syncErrors []string
 	defer func() {
@@ -816,12 +913,14 @@ func (s *Syncer) run() bool {
 			logs.Int("skipped", skipped),
 			logs.Int("dropped", totalDropped),
 			logs.Int("zero_amount", zeroAmount),
+			logs.Int("excluded", excluded),
 			logs.Int("held_for_review", held),
 			logs.Int("errors", len(syncErrors)),
 		)
 		span.SetAttributes(
 			attribute.Int("tx_dropped", totalDropped),
 			attribute.Int("tx_zero_amount", zeroAmount),
+			attribute.Int("tx_excluded", excluded),
 			attribute.Int("tx_held", held),
 		)
 		if zeroAmount > 0 {
@@ -864,11 +963,19 @@ func (s *Syncer) run() bool {
 	if err := s.state.PrunePendingMap(s.st); err != nil {
 		log.Printf("Prune pending map: %v", err)
 	}
+	if err := s.state.PruneBookedRows(s.st); err != nil {
+		log.Printf("Prune booked rows: %v", err)
+	}
+	if err := s.state.PruneBookingIdentities(s.st); err != nil {
+		log.Printf("Prune booking identities: %v", err)
+	}
 	// Both of these had retention policies written down and no caller. A held
 	// transaction past the window describes an import the bank will not offer
 	// again, and a decision past it describes one nobody can check any more.
 	if err := s.st.PruneMatchReviews(); err != nil {
 		log.Printf("Prune match reviews: %v", err)
+	} else if err := s.state.ReloadHeld(s.st); err != nil {
+		log.Printf("Reload held transactions: %v", err)
 	}
 	if err := s.st.PruneMatchDecisions(); err != nil {
 		log.Printf("Prune match decisions: %v", err)
@@ -1029,6 +1136,11 @@ func (s *Syncer) run() bool {
 			logs.Float64("duration_sec", fetchElapsed),
 		)
 		fetchSpan.End()
+		rawTxns, excludedTxns := splitImportable(rawTxns)
+		excluded += len(excludedTxns)
+		s.countExcluded(ctx, label, excludedTxns)
+		s.releaseWithdrawn(ctx, label, acct, rawTxns, excludedTxns)
+		s.countReferenceSources(ctx, label, rawTxns)
 
 		markSynced := func() {
 			synced = append(synced, acct.ID)
@@ -1065,6 +1177,8 @@ func (s *Syncer) run() bool {
 
 		pol := s.matchPolicy(label)
 		pol.PayeeFrequency = payeeFrequency(rawTxns, pol.PayeePrefixes)
+		pol.Booked = s.state.Booked(acct.ID)
+		pol.Sealed = s.state.Sealed(acct.ID, dateFrom)
 
 		lo, hi := candidateWindow(dateFrom, rawTxns)
 		existing, err := s.ac.ListTransactions(ctx, account.ID, lo, hi)
@@ -1112,6 +1226,8 @@ func (s *Syncer) run() bool {
 		}
 
 		txnKeys, keyCollisions := importKeys(rawTxns, pol.PayeePrefixes)
+		listed := listedPendingKeys(rawTxns, txnKeys)
+		identities := txnIdentities(rawTxns)
 		if keyCollisions > 0 {
 			log.Printf("[%s] %d transaction(s) would have shared an identity under the "+
 				"pre-v3 import key and been dropped", label, keyCollisions)
@@ -1127,6 +1243,11 @@ func (s *Syncer) run() bool {
 		acctInterrupted := false
 		var resumeFrom time.Time
 		importStarted := time.Now()
+		skip := func(reason string) {
+			skipped++
+			acctSkipped++
+			skippedBy[reason]++
+		}
 		failWrite := func(what string, err error) {
 			acctWriteFailed = true
 			log.Printf("[%s] %s: %v", label, what, err)
@@ -1182,7 +1303,8 @@ func (s *Syncer) run() bool {
 				s.traceDecision(matchCtx, tracer, label, d)
 			}
 
-			outs, err := budget.ReconcileBatch(matchCtx, s.ac, account.ID, fields, matchedThisRun, traced)
+			heldAuth, heldByID := s.heldAuthorisationsOf(acct)
+			outs, err := budget.ReconcileBatch(matchCtx, s.ac, account.ID, fields, matchedThisRun, heldAuth, traced)
 			if err != nil {
 				matchSpan.RecordError(err)
 				matchSpan.SetStatus(codes.Error, "reconcile failed")
@@ -1223,13 +1345,20 @@ func (s *Syncer) run() bool {
 					continue
 				}
 				t, wasCreated := out.Transaction, out.Created
-				s.recordMatch(ctx, label, matchOutcome(wasCreated), pol.Version(), out)
+				s.recordMatch(ctx, label, out.Name(), pol.Version(), out)
 				matchedThisRun = append(matchedThisRun, t)
 				remember(t)
 
 				placed, touched := s.settle(ctx, label, acct, w, t, wasCreated)
 				if touched {
 					newlyTouched = append(newlyTouched, t)
+				}
+				if out.Counterpart != nil {
+					if auth, ok := heldByID[out.Counterpart.ID]; ok {
+						if err := s.retireCounterpart(ctx, acct, auth, t, false); err != nil {
+							log.Printf("[%s] %v", label, err)
+						}
+					}
 				}
 				switch placed {
 				case dispositionAdded:
@@ -1239,8 +1368,7 @@ func (s *Syncer) run() bool {
 					updated++
 					acctUpdated++
 				default:
-					skipped++
-					acctSkipped++
+					skip("adopted")
 				}
 				// Only now is this transaction finished, so only now may the
 				// resume point pass it.
@@ -1279,15 +1407,17 @@ func (s *Syncer) run() bool {
 			pendingKey := txnKeys[txnIndex]
 			// Only reference-less rows ever had a different identity; a bank
 			// reference is what it always was.
-			legacyKey := ""
+			legacyKey, legacyRef := "", ""
 			if ref == "" {
 				legacyKey = legacyImportKey(date, amountCents)
+				legacyRef = txn.TransactionID
 			}
 
 			// Already waiting for a decision. It must not be offered a second time,
 			// and it must not slip in through the ordinary path either — the
 			// decision is what releases it.
-			if held := s.state.Held(acct.ID); held[pendingKey] || (legacyKey != "" && held[legacyKey]) {
+			if held := s.state.Held(acct.ID); held[pendingKey] || (legacyKey != "" && held[legacyKey]) ||
+				(legacyRef != "" && held[legacyRef]) {
 				continue
 			}
 
@@ -1316,9 +1446,19 @@ func (s *Syncer) run() bool {
 			}
 			booked := pending
 			booked.Cleared = true
+			booked.Identity = identities[txnIndex]
 
 			if txnStatus == "PDNG" {
-				if _, _, exists := s.pendingEntry(acct.ID, pendingKey, legacyKey); !exists {
+				if s.alreadyBooked(acct.ID, ref, pendingKey, legacyKey) ||
+					(legacyRef != "" && s.alreadyBooked(acct.ID, legacyRef, legacyRef, "")) {
+					if t := knownByRef[ref]; ref != "" && t != nil {
+						matchedThisRun = append(matchedThisRun, t)
+					}
+					log.Printf("[%s] Authorisation %s already settled by its booking, skipped", label, pendingKey)
+					skip("authorisation_settled")
+					continue
+				}
+				if _, _, exists := s.pendingOrLegacyEntry(acct.ID, pendingKey, legacyKey, legacyRef); !exists {
 					work = append(work, modelWork{
 						kind: workPending, fields: pending,
 						pendingKey: pendingKey, ref: ref, date: date,
@@ -1328,14 +1468,13 @@ func (s *Syncer) run() bool {
 					}
 					continue
 				} else {
-					_, val, _ := s.pendingEntry(acct.ID, pendingKey, legacyKey)
+					_, val, _ := s.pendingOrLegacyEntry(acct.ID, pendingKey, legacyKey, legacyRef)
 					if prev, _ := splitPendingVal(val); prev != "" {
 						if t := knownByID[prev]; t != nil {
 							matchedThisRun = append(matchedThisRun, t)
 						}
 					}
-					skipped++
-					acctSkipped++
+					skip("authorisation_seen")
 				}
 
 			} else {
@@ -1345,13 +1484,35 @@ func (s *Syncer) run() bool {
 						if t := knownByRef[ref]; t != nil {
 							matchedThisRun = append(matchedThisRun, t)
 						}
-						skipped++
-						acctSkipped++
+						skip("reference")
 						continue
 					}
 				}
+				if _, done := s.state.Imported(acct.ID)[legacyRef]; legacyRef != "" && done {
+					if t := knownByRef[legacyRef]; t != nil {
+						matchedThisRun = append(matchedThisRun, t)
+						s.recordIdentity(ctx, label, acct, booked.Identity, t.ID, legacyRef)
+					}
+					skip("transaction_id")
+					continue
+				}
+				if txnID, seen := s.state.BookedUnder(acct.ID, booked.Identity); ref == "" && seen {
+					claim := knownByID[txnID]
+					if claim == nil {
+						claim = &budget.Transaction{ID: txnID}
+					}
+					matchedThisRun = append(matchedThisRun, claim)
+					s.recordIdentity(ctx, label, acct, booked.Identity, txnID, ref)
+					skip("content")
+					continue
+				}
 
-				if matchedKey, pendingVal, inPending := s.pendingEntry(acct.ID, pendingKey, legacyKey); inPending {
+				matchedKey, pendingVal, inPending := s.pendingOrLegacyEntry(acct.ID, pendingKey, legacyKey, legacyRef)
+				if inPending && listed[matchedKey] {
+					inPending = false
+					s.countListedPendingTwin(ctx, label, pendingKey)
+				}
+				if inPending {
 					txnID, _ := splitPendingVal(pendingVal)
 					existingTxn := knownByID[txnID]
 
@@ -1373,14 +1534,17 @@ func (s *Syncer) run() bool {
 								continue
 							}
 						}
+						labelRef := ref
+						if legacyRef != "" && matchedKey == legacyRef {
+							labelRef = legacyRef
+						}
 						s.recordReferenceLabel(ctx, runID, label, acct, &asItWas, booked,
-							pendingKey, ref, pol)
+							pendingKey, labelRef, pol)
 
 						matchedThisRun = append(matchedThisRun, existingTxn)
 						newlyTouched = append(newlyTouched, existingTxn)
-						if err := s.state.DeletePending(acct.ID, matchedKey, s.st); err != nil {
-							bookkeepingFailed(ctx, "DeletePending", label, ref, err)
-						}
+						s.consumePending(ctx, label, acct, matchedKey, existingTxn.ID, ref)
+						s.recordIdentity(ctx, label, acct, booked.Identity, existingTxn.ID, ref)
 						if ref != "" {
 							if err := s.state.AddImportedRef(acct.ID, ref, date.Format("2006-01-02"), s.st); err != nil {
 								bookkeepingFailed(ctx, "AddImportedRef", label, ref, err)
@@ -1529,7 +1693,11 @@ func (s *Syncer) run() bool {
 	if s.met != nil {
 		s.met.txAdded.Add(ctx, int64(added), metric.WithAttributes(attribute.String("backend", s.backendName)))
 		s.met.txConfirmed.Add(ctx, int64(updated), metric.WithAttributes(attribute.String("backend", s.backendName)))
-		s.met.txSkipped.Add(ctx, int64(skipped), metric.WithAttributes(attribute.String("backend", s.backendName)))
+		for reason, n := range skippedBy {
+			s.met.txSkipped.Add(ctx, int64(n), metric.WithAttributes(
+				attribute.String("backend", s.backendName),
+				attribute.String("reason", reason)))
+		}
 	}
 	log.Printf("Done: %d added, %d confirmed, %d skipped", added, updated, skipped)
 
@@ -1663,8 +1831,8 @@ func lessTxn(a, b enablebanking.Transaction) bool {
 	if a.AmountCents != b.AmountCents {
 		return a.AmountCents < b.AmountCents
 	}
-	if a.Payee != b.Payee {
-		return a.Payee < b.Payee
+	if a.KeyPayee != b.KeyPayee {
+		return a.KeyPayee < b.KeyPayee
 	}
 	return a.EntryRef < b.EntryRef
 }
@@ -1675,6 +1843,13 @@ func lessTxn(a, b enablebanking.Transaction) bool {
 // It returns the key that actually matched, because that is the key the entry
 // has to be deleted under once the booking has consumed it. Writing only ever
 // uses the current scheme, so the old one drains away by itself.
+func (s *Syncer) pendingOrLegacyEntry(acctID int64, key, legacy, legacyRef string) (matched, value string, ok bool) {
+	if matched, value, ok = s.pendingEntry(acctID, key, legacy); ok || legacyRef == "" {
+		return matched, value, ok
+	}
+	return s.pendingEntry(acctID, legacyRef, "")
+}
+
 func (s *Syncer) pendingEntry(acctID int64, key, legacy string) (matched, value string, ok bool) {
 	pending := s.state.Pending(acctID)
 	if v, found := pending[key]; found {
@@ -1801,7 +1976,7 @@ func measureFieldWidth(txns []enablebanking.Transaction) (width int, truncating 
 // costs nothing in practice and buys two things that matter: bounded memory on a
 // first sync of years of history, and a resume point that keeps advancing when a
 // long backfill runs out of time.
-const assignBatchSize = 200
+var assignBatchSize = 200
 
 // workKind is which of the sync loop's paths set a transaction aside, and so
 // which bookkeeping follows once it has been placed.
@@ -1882,9 +2057,8 @@ func (s *Syncer) settle(
 		return dispositionAdded, true
 
 	case workStalePending:
-		if err := s.state.DeletePending(acct.ID, w.matchedKey, s.st); err != nil {
-			bookkeepingFailed(ctx, "DeletePending", label, w.ref, err)
-		}
+		s.consumePending(ctx, label, acct, w.matchedKey, t.ID, w.ref)
+		s.recordIdentity(ctx, label, acct, w.fields.Identity, t.ID, w.ref)
 		rememberRef()
 		if wasCreated {
 			return dispositionAdded, true
@@ -1895,16 +2069,92 @@ func (s *Syncer) settle(
 
 	default:
 		rememberRef()
+		if !wasCreated {
+			s.countIdentityChanged(ctx, label, acct, w.fields.Identity, t.ID)
+		}
+		s.recordIdentity(ctx, label, acct, w.fields.Identity, t.ID, w.ref)
 		if wasCreated {
+			s.recordBooked(ctx, label, acct, t.ID, "", w.ref)
 			return dispositionAdded, true
 		}
 		if stale, ok := s.state.FindPendingKeyByTxnID(acct.ID, t.ID); ok {
-			if err := s.state.DeletePending(acct.ID, stale, s.st); err != nil {
-				bookkeepingFailed(ctx, "DeletePending", label, w.ref, err)
-			}
+			s.consumePending(ctx, label, acct, stale, t.ID, w.ref)
 			return dispositionUpdated, true
 		}
+		s.recordBooked(ctx, label, acct, t.ID, "", w.ref)
 		return dispositionSkipped, false
+	}
+}
+
+func (s *Syncer) countReferenceSources(ctx context.Context, label string, txns []enablebanking.Transaction) {
+	if s.met == nil || s.met.refSource == nil {
+		return
+	}
+	type origin struct{ status, source string }
+	counts := map[origin]int64{}
+	for _, t := range txns {
+		counts[origin{t.Status, t.RefSource}]++
+	}
+	for o, n := range counts {
+		s.met.refSource.Add(ctx, n, metric.WithAttributes(
+			attribute.String("bank", label),
+			attribute.String("status", o.status),
+			attribute.String("source", o.source)))
+	}
+}
+
+func (s *Syncer) alreadyBooked(acctID int64, ref, pendingKey, legacyKey string) bool {
+	if ref != "" {
+		if _, done := s.state.Imported(acctID)[ref]; done {
+			return true
+		}
+	}
+	return s.state.Consumed(acctID, pendingKey) || s.state.Consumed(acctID, legacyKey)
+}
+
+func (s *Syncer) consumePending(ctx context.Context, label string, acct store.BankAccount, pendingKey, txnID, ref string) {
+	if err := s.state.DeletePending(acct.ID, pendingKey, s.st); err != nil {
+		bookkeepingFailed(ctx, "DeletePending", label, ref, err)
+	}
+	s.recordBooked(ctx, label, acct, txnID, pendingKey, ref)
+}
+
+func (s *Syncer) recordIdentity(ctx context.Context, label string, acct store.BankAccount, identity, txnID, ref string) {
+	if identity == "" {
+		return
+	}
+	if err := s.state.RecordIdentity(acct.ID, identity, txnID, s.st); err != nil {
+		bookkeepingFailed(ctx, "RecordIdentity", label, ref, err)
+	}
+}
+
+func (s *Syncer) countIdentityChanged(ctx context.Context, label string, acct store.BankAccount, identity, txnID string) {
+	known := s.state.IdentitiesOf(acct.ID, txnID)
+	if identity == "" || len(known) == 0 || slices.Contains(known, identity) {
+		return
+	}
+	log.Printf("[%s] Booking adopted row %s, which was booked for a different bank record — the record changed, or a twin was absorbed", label, txnID)
+	if s.met != nil && s.met.identityChanged != nil {
+		s.met.identityChanged.Add(ctx, 1, metric.WithAttributes(attribute.String("bank", label)))
+	}
+}
+
+func txnIdentities(txns []enablebanking.Transaction) []string {
+	out := make([]string, len(txns))
+	seen := map[string]int{}
+	for i, t := range txns {
+		if t.ContentKey == "" {
+			continue
+		}
+		seen[t.ContentKey]++
+		out[i] = fmt.Sprintf("%s|%d", t.ContentKey, seen[t.ContentKey])
+	}
+	return out
+}
+
+func (s *Syncer) recordBooked(ctx context.Context, label string, acct store.BankAccount, txnID, pendingKey, ref string) {
+	if err := s.state.RecordBooked(acct.ID, txnID, pendingKey, s.st); err != nil {
+		bookkeepingFailed(ctx, "RecordBooked", label, ref, err)
 	}
 }
 

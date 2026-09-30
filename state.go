@@ -27,6 +27,10 @@ type State struct {
 	// in ImportedRefs: a held transaction has not been imported, and marking it
 	// as such would mean it never comes back.
 	HeldKeys map[int64]map[string]bool
+
+	BookedRows map[int64]map[string]string
+
+	Identities map[int64]map[string]string
 }
 
 func (s *State) Pending(bankAccountID int64) map[string]string {
@@ -87,6 +91,16 @@ func LoadFromStore(st *store.Store) (*State, error) {
 	s.HeldKeys, err = st.AllHeldKeys()
 	if err != nil {
 		return nil, fmt.Errorf("load held transactions: %w", err)
+	}
+
+	s.BookedRows, err = st.AllBookedRows()
+	if err != nil {
+		return nil, fmt.Errorf("load booked rows: %w", err)
+	}
+
+	s.Identities, err = st.AllBookingIdentities()
+	if err != nil {
+		return nil, fmt.Errorf("load booking identities: %w", err)
 	}
 
 	return s, nil
@@ -263,4 +277,118 @@ func (s *State) DeleteHeldKey(bankAccountID int64, key string) {
 	if keys := s.HeldKeys[bankAccountID]; keys != nil {
 		delete(keys, key)
 	}
+}
+
+func (s *State) RecordBooked(bankAccountID int64, txnID, pendingKey string, st *store.Store) error {
+	if s.BookedRows == nil {
+		s.BookedRows = make(map[int64]map[string]string)
+	}
+	rows := s.BookedRows[bankAccountID]
+	if rows == nil {
+		rows = make(map[string]string)
+		s.BookedRows[bankAccountID] = rows
+	}
+	if pendingKey != "" || rows[txnID] == "" {
+		rows[txnID] = pendingKey
+	}
+	return st.AddBookedRow(bankAccountID, txnID, pendingKey)
+}
+
+func (s *State) Booked(bankAccountID int64) func(txnID string) bool {
+	return func(txnID string) bool {
+		_, ok := s.BookedRows[bankAccountID][txnID]
+		return ok
+	}
+}
+
+func (s *State) Consumed(bankAccountID int64, pendingKey string) bool {
+	if pendingKey == "" {
+		return false
+	}
+	for _, consumed := range s.BookedRows[bankAccountID] {
+		if consumed == pendingKey {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *State) PruneBookedRows(st *store.Store) error {
+	updated, err := st.PruneBookedRows()
+	if err != nil {
+		return err
+	}
+	s.BookedRows = updated
+	return nil
+}
+
+func (s *State) ReloadHeld(st *store.Store) error {
+	held, err := st.AllHeldKeys()
+	if err != nil {
+		return err
+	}
+	s.HeldKeys = held
+	return nil
+}
+
+func (s *State) RecordIdentity(bankAccountID int64, identity, txnID string, st *store.Store) error {
+	if s.Identities == nil {
+		s.Identities = make(map[int64]map[string]string)
+	}
+	if s.Identities[bankAccountID] == nil {
+		s.Identities[bankAccountID] = make(map[string]string)
+	}
+	s.Identities[bankAccountID][identity] = txnID
+	return st.AddBookingIdentity(bankAccountID, identity, txnID)
+}
+
+func (s *State) BookedUnder(bankAccountID int64, identity string) (string, bool) {
+	if identity == "" {
+		return "", false
+	}
+	txnID, ok := s.Identities[bankAccountID][identity]
+	return txnID, ok
+}
+
+func (s *State) PruneBookingIdentities(st *store.Store) error {
+	updated, err := st.PruneBookingIdentities()
+	if err != nil {
+		return err
+	}
+	s.Identities = updated
+	return nil
+}
+
+func (s *State) Sealed(bankAccountID int64, dateFrom time.Time) func(txnID, identity string) bool {
+	type record struct {
+		identities map[string]bool
+		reach      string
+	}
+	rows := map[string]*record{}
+	for identity, txnID := range s.Identities[bankAccountID] {
+		r := rows[txnID]
+		if r == nil {
+			r = &record{identities: map[string]bool{}}
+			rows[txnID] = r
+		}
+		r.identities[identity] = true
+		if reach, _, _ := strings.Cut(identity, "|"); reach > r.reach {
+			r.reach = reach
+		}
+	}
+	cutoff := dateFrom.Format("2006-01-02")
+	return func(txnID, identity string) bool {
+		r := rows[txnID]
+		return r != nil && !r.identities[identity] && r.reach < cutoff
+	}
+}
+
+func (s *State) IdentitiesOf(bankAccountID int64, txnID string) []string {
+	var out []string
+	for identity, id := range s.Identities[bankAccountID] {
+		if id == txnID {
+			out = append(out, identity)
+		}
+	}
+	return out
 }

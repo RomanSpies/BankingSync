@@ -219,12 +219,15 @@ and a dashboard should say so in a panel description rather than imply freshness
 | `bankingsync_match_labels_total` | counter | `bank`, `source`, `agreed` | Decisions settled by something other than the model — the only observations the model did not produce itself. |
 | `bankingsync_match_reviews_total` | counter | `bank`, `backend`, `outcome`, `reason` | Transactions entering and leaving the review queue. |
 | `bankingsync_match_review_choice_total` | counter | `bank`, `backend`, `choice` | **Whether the person merged into the row the model ranked first.** |
-| `bankingsync_match_reviews_open` | gauge | `bank` | Transactions waiting for a person right now. |
+| `bankingsync_match_reviews_open` | gauge | `bank`, `backend` | Transactions waiting for a person right now. |
 | `bankingsync_match_inquiry_bits` | histogram | `bank`, `outcome` | What the one confirmation a sync may ask for was expected to be worth. |
 | `bankingsync_match_inquiry_answers_total` | counter | `bank`, `outcome`, `verdict` | The answers to those. |
 | `bankingsync_match_shadow_decisions_total` | counter | `bank`, `backend`, `candidate`, `agreement` | Decisions made while a candidate parameter set was being watched. |
 | `bankingsync_match_multiplicity_total` | counter | `bank`, `backend` | Transactions settled onto one of several rows nothing could tell apart. |
 | `bankingsync_near_miss_total` | counter | `bank`, `backend`, `reason` | Transactions created although an open row nearly matched. |
+| `bankingsync_listed_pending_twins_total` | counter | `bank` | Bookings kept apart from an authorisation of the same key because the bank still lists that authorisation as pending in the same feed. A bank that briefly lists both halves of one purchase shows up here as a steady rate, and each tick is an uncleared twin left in the budget. |
+| `bankingsync_booking_identity_changed_total` | counter | `bank` | Bookings that adopted a row already booked for a different bank record. Either the bank changed a record between two deliveries while it was still in the fetch window — the probabilistic fallback then settled it onto its own row, correctly — or a genuine twin was absorbed. A rate above zero is the measurement of how stable a bank's booked records really are. |
+| `bankingsync_reference_source_total` | counter | `bank`, `status`, `source` | Fetched transactions by the identifier the bank supplied: `entry_reference` if present, else `transaction_id`, else none. Only `entry_reference` is used as a reference; a bank counted under `transaction_id` is matched by content. Counted per fetched record per run, so a re-delivered transaction counts again; the ratio between sources is what matters. |
 
 Label values:
 
@@ -232,14 +235,35 @@ Label values:
   `reference_model_agreed`, `fallback_key_model_agreed`. The `_model_agreed`
   variants carry `agreed` ∈ `yes`, `no` and say whether the matcher would have
   reached the same pairing on its own.
-- `outcome` on `match_reviews_total` ∈ `queued`, `assigned`, `imported`;
-  `reason` ∈ `ambiguous`, `uncertain` (when queued), `decided` (once answered).
+- `outcome` on `match_reviews_total` ∈ `queued`, `assigned`, `imported`,
+  `settled_by_booking`; `reason` ∈ `ambiguous`, `uncertain` (when queued),
+  `decided` (once answered), `automatic` (a held authorisation its booking
+  settled during a sync, with nobody asked).
   `ambiguous` means the arrangement had a free choice — the margin was under a
   bit; `uncertain` means the probability landed in the band.
 - `choice` ∈ `model_best`, `other_candidate`, `created_new`.
 - `verdict` ∈ `same_payment`, `different_payments`, `unknown`.
 - `agreement` ∈ `same`, `different`.
-- `reason` on `near_miss_total` ∈ `ambiguous`, `payee`, `amount`, `date`.
+- `source` on `reference_source_total` ∈ `entry_reference`, `transaction_id`,
+  `none`. `transaction_id` is the one to watch: Enable Banking documents it as
+  liable to change when the list is retrieved again, so it is never used as a
+  reference, and a bank that supplies nothing better is identified by the content
+  of its booked records instead.
+- `reason` on `transactions_skipped_total` ∈ `reference` (its bank reference was
+  imported before), `transaction_id` (imported under its `transaction_id` by an
+  earlier version; the bridge ends by itself once the 38-day retention has passed
+  over those records), `content` (a booking without a reference whose content key
+  is already booked), `authorisation_seen` (a pending row already imported and
+  still open), `authorisation_settled` (an authorisation whose booking already
+  arrived), `adopted` (the matcher placed it on a row that already held it).
+- `status` on `transactions_excluded_total` ∈ `SCHD`, `CNCL`, `RJCT`; on
+  `authorisations_withdrawn_total` ∈ `CNCL`, `RJCT`. On `reference_source_total`
+  it is the status after `HOLD` is read as `PDNG`, and whatever else the bank
+  sends — the specification names seven values.
+- `reason` on `near_miss_total` ∈ `ambiguous`, `payee`, `amount`, `date`,
+  `booked` (an authorisation created beside a row bankingsync had already booked,
+  which it would otherwise have adopted), `booked_twin` (a booking created beside
+  a row that stands for another bank record the feed can no longer deliver).
 - `candidate` is the watched set's own 12-hex `param_version`. It is on the
   series because a counter does not reset when the watch moves on, and two
   candidates' tallies would otherwise add into one line describing neither.
@@ -275,22 +299,24 @@ unanswerable, not that the matcher is fine.
 | `bankingsync_budget_write_duration_seconds` | histogram | `backend` | One bank account's import. Buckets `0.01, 0.05, 0.1, 0.5, 1, 5, 15, 60, 300`. |
 | `bankingsync_transactions_added_total` | counter | `backend` | |
 | `bankingsync_transactions_confirmed_total` | counter | `backend` | Pending promoted to booked. |
-| `bankingsync_transactions_skipped_total` | counter | `backend` | Already imported. |
+| `bankingsync_transactions_skipped_total` | counter | `backend`, `reason` | Already in the budget, by what recognised it — see the label values below. A shift from `adopted` to `content` or `reference` is re-deliveries no longer reaching the matcher, which is also why `match_probability` loses volume. |
 | `bankingsync_transactions_dropped_total` | counter | `bank` | Failed to parse. **Any value above zero is a bug or a bank change.** |
 | `bankingsync_transactions_zero_amount_total` | counter | `bank` | Skipped on purpose, not an error. |
+| `bankingsync_transactions_excluded_total` | counter | `bank`, `status` | Not imported because of their status: `SCHD`, `CNCL` or `RJCT`. Counted per fetched record per run, so a scheduled payment counts on every run until it books. |
+| `bankingsync_authorisations_withdrawn_total` | counter | `bank`, `status` | Imported authorisations the bank later reported as `CNCL` or `RJCT`. Each tick is an uncleared row somebody has to delete by hand. |
 | `bankingsync_import_key_collisions_total` | counter | `bank` | Transactions that *would* have collided under the pre-v3 import key. Counts a defect that no longer happens; a rising series says a feed reaches the shape that used to lose data. |
 | `bankingsync_rules_applied_total` | counter | `backend` | Actual only — Firefly runs rules server-side. |
 | `bankingsync_commit_errors_total` | counter | `backend` | |
 | `bankingsync_write_errors_total` | counter | `backend` | Per-transaction. |
 | `bankingsync_balance_checks_total` | counter | `bank`, `backend`, `state` | `state` ∈ `ok`, `drift`, `""` (unknown). |
-| `bankingsync_balance_drift_cents` | gauge | `bank`, `state` | Budget total minus the bank's booked balance plus outstanding pendings. **Accounts never compared are not reported**, so a missing series and a drift of zero are different things. |
+| `bankingsync_balance_drift_cents` | gauge | `bank`, `backend`, `state` | Budget total minus the bank's booked balance plus outstanding pendings. **Accounts never compared are not reported**, so a missing series and a drift of zero are different things. |
 | `bankingsync_pending_transactions` | gauge | — | |
 | `bankingsync_session_expiry_days` | gauge | — | **Absent until known.** |
 | `bankingsync_store_operations_total` | counter | `kind`, `table`, `result` | `kind` ∈ `select`, `insert`, `update`, `delete`, `replace`, `begin`, `commit`, `create`, `pragma`, `vacuum`, `analyze`, `other`. `result` ∈ `ok`, `error`. A query matching no rows is `ok`, not an error. |
-| `bankingsync_store_duration_seconds` | histogram | `kind`, `table`, `result` | Buckets `0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5`. A local SQLite file answers in microseconds; the condition worth catching is a contended or failing database, not a slow query. |
-| `bankingsync_backend_requests_total` | counter | `backend`, `method`, `route` | Firefly only. |
-| `bankingsync_backend_rate_limited_total` | counter | `backend` | Firefly only. |
-| `bankingsync_backend_conflicts_total` | counter | `backend` | Firefly only. |
+| `bankingsync_store_duration_seconds` | histogram | `kind`, `table` | Buckets `0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5`. A local SQLite file answers in microseconds; the condition worth catching is a contended or failing database, not a slow query. |
+| `bankingsync_backend_requests_total` | counter | `backend`, `method`, `route`, `status` | Firefly only. `route` has identifiers collapsed (`/api/v1/transactions/{id}`); `status` is the HTTP status code. |
+| `bankingsync_backend_rate_limited_total` | counter | `backend`, `route` | Firefly only. Counted when a retry follows, so a rate here is slowness rather than loss. |
+| `bankingsync_backend_conflicts_total` | counter | `backend`, `reason` | Firefly only. `reason` ∈ `transaction_gone`, `duplicate_rejected`, `user_split_group`, `currency_mismatch`. Each is a write bankingsync deliberately did not make. |
 | `bankingsync_review_problems_total` | counter | `op`, `outcome` | `op` ∈ `list`, `resolve`, `confirm`, `inquiry`, `matching`. `outcome` ∈ `refused`, `failed`. **A refusal is the program working** — a stale page was rejected; a failure is not. The ratio is the interesting figure, which is why they share a series. |
 
 `backend` ∈ `actual`, `firefly`. `bank` is the operator's label for a bank
@@ -308,6 +334,9 @@ Nothing here is high-cardinality by web-service standards, but two labels grow:
   more. They are on `match_probability`, `match_reference_probability` and
   `match_shadow_decisions_total` only.
 - **`bank`** grows with connected accounts — single digits.
+- **`status`** on `reference_source_total` is the bank's own string, passed
+  through. Enable Banking specifies seven values, so it is bounded by the
+  specification rather than by the code.
 
 `match_level_observations` is fixed at **34 series** (17 levels × 2 sides) and
 `match_level_weight` at 17. `match_gate_check` is 4 checks × 4 statuses + 1.
@@ -334,6 +363,41 @@ sync.run
 │       └── match.decide                    one per incoming transaction
 └── rules.apply                             Actual only
 ```
+
+**`sync.run`** — one run over every connected account. Its attributes are the
+run's totals, set when it ends, so a trace search answers "which runs dropped or
+excluded something" without reading logs.
+
+| Attribute | Meaning |
+|---|---|
+| `account_count` | connected bank accounts |
+| `accounts_failed`, `accounts_synced` | accounts whose fetch failed, and `account_count` minus those |
+| `total_added`, `total_confirmed`, `total_skipped` | what the run did to the budget, as in the three transaction counters |
+| `tx_dropped` | records that failed to parse; above zero degrades the run |
+| `tx_zero_amount` | zero-amount records declined on purpose |
+| `tx_excluded` | records not imported because of their status (`SCHD`, `CNCL`, `RJCT`) |
+| `tx_held` | transactions held for a person to decide |
+
+**`enable_banking.fetch_transactions`** — one account's fetch, all pages.
+
+| Attribute | Meaning |
+|---|---|
+| `bank`, `account_uid`, `date_from` | which account, from which day |
+| `txn_count` | records returned, **before** the status filter |
+| `txn_dropped` | records that failed to parse |
+| `duration_sec` | the fetch, as in `bankingsync_fetch_duration_seconds` |
+
+**`import.transactions_batch`** — one account's import into the budget.
+
+| Attribute | Meaning |
+|---|---|
+| `bank`, `budget_account` | which account, into which budget account |
+| `txn_count` | records offered to the import, **after** the status filter; the gap to the fetch span's `txn_count` is what the status excluded |
+| `added`, `confirmed`, `skipped`, `held` | what became of them |
+| `write_failed` | whether a write to the budget failed during the import |
+
+**`rules.apply`** carries `rules_applied`; **`budget.ensure_connection`** carries
+nothing and exists for its duration and its error status.
 
 **`match.reconcile_batch`** — the only step in an import whose cost is not
 proportional to the transactions in it. A batch is weighed against every open row
@@ -411,8 +475,10 @@ intercept 0.
 
 ### Elsewhere
 
-Every HTTP request is traced twice over: `HTTP <METHOD>` from the server
-middleware and `<METHOD> <path>` from the handler.
+Every request to the web UI gets one server span, `<METHOD> <path>`. Every
+outgoing request to Enable Banking or Actual gets one client span, `HTTP <METHOD>`,
+beneath the span of the call that made it; Firefly's requests have a client span
+of their own, described below.
 
 Enable Banking and both budget backends trace their own calls, so a slow sync can
 be attributed to the bank, the backend or the matching without guessing:
@@ -423,6 +489,36 @@ be attributed to the bank, the backend or the matching without guessing:
 | `bankingsync/actual` | `actual.init`, `actual.login`, `actual.download_budget`, `actual.sync`, `actual.sync_sync`, `actual.commit` |
 | `bankingsync/firefly` | `firefly.list_transactions`, `firefly.find_by_external_ref`, `firefly.create_transaction`, `firefly.update_transaction`, `firefly.get_or_create_account`, `firefly.account_balance`, `firefly.set_opening_balance` |
 | `bankingsync` | `email.send`, `update.check`, `update.fetch_dockerhub` |
+
+Beneath the Firefly spans sits one client span per HTTP request, named
+`firefly <METHOD> <route>` with identifiers collapsed out of the route. It is the
+only span whose name is built at run time.
+
+| Span | Attributes |
+|---|---|
+| `enablebanking.fetch_page` | `txn_count`, `has_more` |
+| `enablebanking.fetch_balances` | `balance_count` |
+| `enablebanking.get_aspsps` | `bank_count` |
+| `enablebanking.start_auth` | `bank`, `country` |
+| `enablebanking.complete_auth` | `account_count` |
+| `firefly <METHOD> <route>` | `http.request.method`, `url.path`, `firefly.idempotent`, `http.response.status_code`, `http.request.resend_count`; events `retry` (`attempt`, `reason` ∈ `transport`, `server_error`) and `rate_limited` (`attempt`, `wait_seconds`) |
+| `firefly.list_transactions` | `firefly.account_id`, `firefly.window_start`, `firefly.window_end`, `firefly.result_count` |
+| `firefly.find_by_external_ref` | `firefly.account_id`, `firefly.hit` |
+| `firefly.create_transaction` | `firefly.account_id`, `firefly.cleared`, `firefly.has_external_ref` |
+| `firefly.update_transaction`, `firefly.account_balance` | `firefly.account_id` |
+| `firefly.set_opening_balance` | `firefly.account_id`, `firefly.written` |
+| `firefly.get_or_create_account` | `firefly.currency`, `firefly.has_iban` |
+| `actual.download_budget` | `cache_hit`, `zip_bytes` |
+| `actual.sync` | `message_count` |
+| `actual.sync_sync` | `request_messages`, `response_bytes` |
+| `actual.commit` | `change_count` |
+| `email.send` | `subject`, `configured` |
+| `update.check` | `current_version`, `latest_version`, `notified` |
+| `update.fetch_dockerhub` | `best_tag` |
+| `<METHOD> <path>` (web UI) | `http.method`, `http.path`, `http.status_code`; a refused review answer adds `review.op` and `review.refused` |
+| `HTTP <METHOD>` (to Enable Banking, Actual) | `http.request.method`, `server.address`, `url.path`, `http.response.status_code` |
+
+`actual.init` and `actual.login` carry no attributes.
 
 The two backends are not instrumented alike: Firefly is a REST API and every call
 is a request worth timing, so each has a span; Actual is a local sync engine and
@@ -452,12 +548,12 @@ Every record the program can emit, by area:
 
 | Area | Records |
 |---|---|
-| `sync` | `sync.started` (I), `sync.finished` (I) |
+| `sync` | `sync.started` (I), `sync.finished` (I), `sync.authorisation_cancelled` (W) — an imported authorisation the bank cancelled or rejected; its uncleared row has to be deleted by hand |
 | `fetch_transactions` | `.completed` (I), `.failed` (E) |
 | `session` | `session.ended` (W) — the bank reported the account's session over (`reason` carries its code, e.g. `CLOSED_SESSION`); the account is skipped until it is renewed |
 | `import` | `import.batch.completed` (I) |
 | `transaction` / `transactions` | `transaction.parse.failed` (W), `transactions.dropped` (E) |
-| `match` | `match.held_for_review` (W), `match.near_miss` (W), `match.hold_failed` (E), `match.review_resolved` (I), `match.inquiry_raised` (I), `match.inquiry_answered` (I), `match.trial_watched` (I), `match.trial_promoted` (I), `match.trial_reverted` (I), `match.trial_dropped` (I), `match.decision_not_recorded` (W), `match.inquiry_not_recorded` (W), `match.usample_not_recorded` (W) |
+| `match` | `match.held_for_review` (W), `match.near_miss` (W), `match.hold_failed` (E), `match.review_resolved` (I), `match.review_settled_by_booking` (I), `match.inquiry_raised` (I), `match.inquiry_answered` (I), `match.trial_watched` (I), `match.trial_promoted` (I), `match.trial_reverted` (I), `match.trial_dropped` (I), `match.decision_not_recorded` (W), `match.inquiry_not_recorded` (W), `match.usample_not_recorded` (W) |
 | `review` | `review.refused` (W), `review.failed` (E) |
 | `balance` | `balance.no_usable_type` (W), `balance.moved_during_run` (W), `balance.unavailable` (E) |
 | `drift` | `drift.detected` (W), `drift.record_failed` (E), `drift.total_failed` (E) |
@@ -476,6 +572,13 @@ Every record the program can emit, by area:
 
 The ones a dashboard should care about:
 
+- **`sync.finished`** is the run's summary, one per run: `status`,
+  `duration_sec`, `added`, `confirmed`, `skipped`, `dropped`, `zero_amount`,
+  `excluded`, `held_for_review` and `errors`. `sync.started` carries the
+  `run_id` that every decision of the run is recorded under.
+- **`sync.authorisation_cancelled`** carries `bank`, `status`, `date`, `amount`,
+  `payee` and `row_id` — enough to find the uncleared row that has to be deleted.
+
 - **`settings.changed`** is the annotation source for every step in a matching
   series. It carries one attribute per changed setting as `"old -> new"`,
   including `auto_probability_pct`, `review_probability_pct` and
@@ -483,6 +586,11 @@ The ones a dashboard should care about:
 - **`match.trial_promoted`** is the other annotation source, and the one that
   explains a `param_version` change. It carries `param_version`, `previous`,
   `settled_decisions` and `shadow_differing`.
+- **`match.review_settled_by_booking`** is a held authorisation leaving the
+  queue because its booking arrived and was paired with it — by the sync when
+  the pairing cleared the automatic threshold (`reason=automatic`), or by a
+  person choosing it on the booking's review (`reason=decided`). One budget row
+  is written for the pair, dated like the authorisation.
 - **`match.review_resolved`** carries `choice`, which is the same signal as
   `bankingsync_match_review_choice_total` with the payee attached — useful for
   finding the actual transactions behind a rising `other_candidate` rate.

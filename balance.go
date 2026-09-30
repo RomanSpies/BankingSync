@@ -472,6 +472,14 @@ func (s *Syncer) matchPolicy(label string) budget.Policy {
 
 func (s *Syncer) nearMiss(label, reason string, c *budget.Transaction) {
 	switch {
+	case reason == "booked_twin" && c != nil:
+		log.Printf("[%s] near miss (booked_twin): creating a booking although the row of %s "+
+			"dated %s it matches stands for another bank record the feed no longer delivers — a second purchase",
+			label, centsToDecimal(c.AmountCents), c.Date.Format("2006-01-02"))
+	case reason == "booked" && c != nil:
+		log.Printf("[%s] near miss (booked): creating an authorisation although the row of %s "+
+			"dated %s it matches was already booked — a stale authorisation, or a second purchase",
+			label, centsToDecimal(c.AmountCents), c.Date.Format("2006-01-02"))
 	case c != nil:
 		log.Printf("[%s] near miss (%s): creating a new transaction although an open row "+
 			"of %s dated %s was close", label, reason,
@@ -586,6 +594,7 @@ func (s *Syncer) OpeningBalancePreview(
 	if err != nil {
 		return out, fmt.Errorf("fetch transactions: %w", err)
 	}
+	fetched, _ = splitImportable(fetched)
 	openReviews, err := s.st.CountMatchReviewsByAccount()
 	if err != nil {
 		return out, err
@@ -702,6 +711,7 @@ func (s *Syncer) holdForReview(
 		BestPayeeLevel:   best.Comparison.Payee.String(),
 		BestAmountLevel:  best.Comparison.Amount.String(),
 		BestDateLevel:    best.Comparison.Date.String(),
+		Identity:         in.Identity,
 	}
 	if err := s.st.AddMatchReview(r); err != nil {
 		// Recording it failed, so nothing is holding the transaction back and the

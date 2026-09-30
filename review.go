@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,6 +50,7 @@ func (s *Syncer) HeldTransactions(ctx context.Context) ([]web.ReviewItem, error)
 
 	version := s.matchPolicy("").Version()
 	out := make([]web.ReviewItem, 0, len(reviews))
+	awaited := map[int64]bool{}
 	for _, r := range reviews {
 		item := web.ReviewItem{
 			ID:           r.ID,
@@ -71,7 +73,7 @@ func (s *Syncer) HeldTransactions(ctx context.Context) ([]web.ReviewItem, error)
 		item.BankName = bankLabel(acct)
 		item.BudgetAccount = acct.ActualAccount
 
-		cands, _, _, err := s.heldCandidates(ctx, r, acct)
+		cands, _, _, err := s.heldCandidates(ctx, r, acct, reviews)
 		if err != nil {
 			item.Unavailable = err.Error()
 			out = append(out, item)
@@ -85,9 +87,16 @@ func (s *Syncer) HeldTransactions(ctx context.Context) ([]web.ReviewItem, error)
 				PayeeName: c.Transaction.PayeeName,
 				Percent:   percent(c.Probability),
 				Why:       explainComparison(c.Comparison, c.Transaction.Date, r.TxnDate),
+				Held:      c.Transaction.Provisional,
 			})
+			if id, ok := heldReviewID(c.Transaction.ID); ok {
+				awaited[id] = true
+			}
 		}
 		out = append(out, item)
+	}
+	for i := range out {
+		out[i].BookingWaiting = awaited[out[i].ID]
 	}
 	return out, nil
 }
@@ -156,7 +165,11 @@ func (s *Syncer) ResolveHeld(
 		return web.Refuse("the bank account this came from is no longer connected, " +
 			"so there is nothing to merge into")
 	}
-	cands, _, pol, err := s.heldCandidates(ctx, r, acct)
+	reviews, err := s.st.GetMatchReviews()
+	if err != nil {
+		return fmt.Errorf("read the review queue: %w", err)
+	}
+	cands, accountID, pol, err := s.heldCandidates(ctx, r, acct, reviews)
 	if err != nil {
 		return err
 	}
@@ -177,6 +190,10 @@ func (s *Syncer) ResolveHeld(
 	if got := percent(chosen.Probability); got != shownPercent {
 		return web.Refuse("the budget changed since this page was drawn: that match is now %d%%, "+
 			"not %d%%. Look at it again before deciding", got, shownPercent)
+	}
+
+	if chosen.Transaction.Provisional {
+		return s.settleHeldPair(ctx, r, acct, accountID, reviews, chosen, chosenWasBest, in)
 	}
 
 	if err := budget.Adopt(ctx, s.ac, chosen.Transaction, in, pol); err != nil {
@@ -224,10 +241,11 @@ func (s *Syncer) publish(ctx context.Context) error {
 // something that is not there; and on the Actual backend this listing call is
 // also what warms the in-process map that a later update depends on.
 func (s *Syncer) heldCandidates(
-	ctx context.Context, r store.MatchReview, acct store.BankAccount,
+	ctx context.Context, r store.MatchReview, acct store.BankAccount, reviews []store.MatchReview,
 ) ([]budget.Candidate, string, budget.Policy, error) {
 	pol := s.matchPolicy(bankLabel(acct))
 	pol.OnNearMiss = nil
+	pol.Booked = s.state.Booked(acct.ID)
 
 	if r.Backend != "" && r.Backend != s.backendName {
 		return nil, "", pol, web.Refuse("this was held while %s was the budget backend, and "+
@@ -246,7 +264,32 @@ func (s *Syncer) heldCandidates(
 	if err != nil {
 		return nil, "", pol, fmt.Errorf("read the budget: %w", err)
 	}
-	return budget.Assess(existing, in, nil, pol), accountID, pol, nil
+	held, _ := s.heldAuthorisations(reviews, acct)
+	return budget.Assess(budget.WithHeld(existing, held, in), in, nil, pol), accountID, pol, nil
+}
+
+func (s *Syncer) settleHeldPair(
+	ctx context.Context, r store.MatchReview, acct store.BankAccount, accountID string,
+	reviews []store.MatchReview, chosen *budget.Candidate, wasBest bool, in budget.ImportedFields,
+) error {
+	_, byID := s.heldAuthorisations(reviews, acct)
+	auth, ok := byID[chosen.Transaction.ID]
+	if !ok {
+		return web.Refuse("that authorisation is no longer waiting for review. Look at the list again")
+	}
+	t, err := s.ac.Create(ctx, accountID, budget.CounterpartFields(in, chosen.Transaction))
+	if err != nil {
+		return fmt.Errorf("import the transaction: %w", err)
+	}
+	if err := s.publish(ctx); err != nil {
+		return err
+	}
+	if err := s.retireCounterpart(ctx, acct, auth, t, true); err != nil {
+		return err
+	}
+	settled := *chosen
+	settled.Transaction = t
+	return s.releaseHeld(ctx, r, acct, t, false, &settled, wasBest)
 }
 
 func (s *Syncer) budgetAccountID(ctx context.Context, acct store.BankAccount) (string, error) {
@@ -284,6 +327,14 @@ func (s *Syncer) releaseHeld(
 	if r.ExternalRef != "" && r.Cleared {
 		if err := s.state.AddImportedRef(r.BankAccountID, r.ExternalRef, r.TxnDate, s.st); err != nil {
 			bookkeepingFailed(ctx, "AddImportedRef", bankLabel(acct), r.ExternalRef, err)
+		}
+	}
+	if r.Cleared {
+		s.recordIdentity(ctx, bankLabel(acct), acct, r.Identity, t.ID, r.ExternalRef)
+		if key, ok := s.state.FindPendingKeyByTxnID(r.BankAccountID, t.ID); ok && !created {
+			s.consumePending(ctx, bankLabel(acct), acct, key, t.ID, r.ExternalRef)
+		} else {
+			s.recordBooked(ctx, bankLabel(acct), acct, t.ID, "", r.ExternalRef)
 		}
 	}
 	// What the model said, and what turned out to be so. These are the only
@@ -361,6 +412,7 @@ func importedFieldsOf(r store.MatchReview) budget.ImportedFields {
 		ExternalRef:      r.ExternalRef,
 		ImportedPayee:    r.ImportedPayee,
 		Cleared:          r.Cleared,
+		Identity:         r.Identity,
 		CounterpartyIBAN: r.CounterpartyIBAN,
 		SEPA: budget.SEPARefs{
 			EndToEnd:   r.SEPAEndToEnd,
@@ -557,5 +609,94 @@ func (s *Syncer) recordReviewAnswer(r store.MatchReview, created bool, chosen *b
 			DateLevel:   chosen.Comparison.Date.String(),
 			Weight:      chosen.Weight,
 			Probability: chosen.Probability,
+			Candidates:  chosen.Plausible,
 		})
+}
+
+const heldCandidatePrefix = "held:"
+
+func provisionalOf(r store.MatchReview) *budget.Transaction {
+	date, _ := time.Parse("2006-01-02", r.TxnDate)
+	return &budget.Transaction{
+		ID:            heldCandidatePrefix + strconv.FormatInt(r.ID, 10),
+		Date:          date,
+		AmountCents:   r.AmountCents,
+		Currency:      r.Currency,
+		PayeeName:     r.Payee,
+		Notes:         r.Notes,
+		ExternalRef:   r.ExternalRef,
+		ImportedPayee: r.ImportedPayee,
+		Provisional:   true,
+	}
+}
+
+func heldReviewID(candidateID string) (int64, bool) {
+	rest, ok := strings.CutPrefix(candidateID, heldCandidatePrefix)
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(rest, 10, 64)
+	return id, err == nil
+}
+
+func (s *Syncer) heldAuthorisations(reviews []store.MatchReview, acct store.BankAccount) ([]*budget.Transaction, map[string]store.MatchReview) {
+	var rows []*budget.Transaction
+	byID := map[string]store.MatchReview{}
+	for _, r := range reviews {
+		if r.BankAccountID != acct.ID || r.Cleared || (r.Backend != "" && r.Backend != s.backendName) {
+			continue
+		}
+		t := provisionalOf(r)
+		rows = append(rows, t)
+		byID[t.ID] = r
+	}
+	return rows, byID
+}
+
+func (s *Syncer) heldAuthorisationsOf(acct store.BankAccount) ([]*budget.Transaction, map[string]store.MatchReview) {
+	reviews, err := s.st.GetMatchReviews()
+	if err != nil {
+		log.Printf("[%s] held authorisations could not be read, so none is offered to this batch: %v", bankLabel(acct), err)
+		return nil, nil
+	}
+	return s.heldAuthorisations(reviews, acct)
+}
+
+func (s *Syncer) retireCounterpart(
+	ctx context.Context, acct store.BankAccount, auth store.MatchReview, t *budget.Transaction, refute bool,
+) error {
+	label := bankLabel(acct)
+	s.recordBooked(ctx, label, acct, t.ID, auth.PendingKey, auth.ExternalRef)
+	if refute {
+		if err := s.st.SetMatchDecisionTruth(acct.ID, auth.PendingKey, false); err != nil {
+			log.Printf("[%s] could not record the outcome of a decision: %v", label, err)
+		} else if s.met != nil {
+			s.met.matchLabels.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("source", "review"),
+				attribute.String("bank", label)))
+		}
+	}
+	if err := s.st.DeleteMatchReview(auth.ID); err != nil {
+		return fmt.Errorf("the booking was imported, but clearing its authorisation from the queue failed: %w", err)
+	}
+	s.state.DeleteHeldKey(acct.ID, auth.PendingKey)
+
+	reason := "automatic"
+	if refute {
+		reason = "decided"
+	}
+	if s.met != nil {
+		s.met.matchReviews.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("outcome", "settled_by_booking"),
+			attribute.String("reason", reason),
+			attribute.String("bank", label),
+			attribute.String("backend", s.backendName)))
+	}
+	log.Printf("[%s] held authorisation %s %s settled by its booking (%s)", label,
+		centsToDecimal(auth.AmountCents), auth.Payee, reason)
+	olog.Info(ctx, "match.review_settled_by_booking",
+		logs.String("bank", label),
+		logs.String("reason", reason),
+		logs.String("payee", auth.Payee))
+	return nil
 }

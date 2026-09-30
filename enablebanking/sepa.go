@@ -7,6 +7,8 @@ import (
 
 var sepaTagPattern = regexp.MustCompile(`\b(EREF|KREF|MREF|CRED|DEBT|COAM|OAMT|SVWZ|ABWA|ABWE|IBAN|BIC)\+`)
 
+var ingRemittancePattern = regexp.MustCompile(`(?is)^\s*mandatereference:(.*?),creditorid:(.*?),remittanceinformation:(.*)$`)
+
 var sepaPurposeTags = map[string]bool{
 	"SVWZ": true,
 	"ABWA": true,
@@ -40,7 +42,34 @@ func stripSEPAPrefixes(s string) string {
 	return purpose
 }
 
+func stripSEPATags(s string) string {
+	purpose, _ := parseSEPATags(s)
+	return purpose
+}
+
 func parseSEPA(s string) (string, SEPARefs) {
+	text, refs, ok := parseINGRemittance(s)
+	if !ok {
+		return parseSEPATags(s)
+	}
+	purpose, tagged := parseSEPATags(text)
+	refs.merge(tagged)
+	return purpose, refs
+}
+
+func parseINGRemittance(s string) (string, SEPARefs, bool) {
+	m := ingRemittancePattern.FindStringSubmatch(s)
+	if m == nil {
+		return s, SEPARefs{}, false
+	}
+	refs := SEPARefs{
+		Mandate:    strings.TrimSpace(m[1]),
+		CreditorID: strings.TrimSpace(m[2]),
+	}
+	return strings.TrimSpace(m[3]), refs, true
+}
+
+func parseSEPATags(s string) (string, SEPARefs) {
 	loc := sepaTagPattern.FindAllStringSubmatchIndex(s, -1)
 	if len(loc) == 0 {
 		return s, SEPARefs{}

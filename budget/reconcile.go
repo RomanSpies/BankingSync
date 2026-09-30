@@ -25,7 +25,7 @@ func Reconcile(
 	claimed []*Transaction,
 	pol Policy,
 ) (Outcome, error) {
-	out, err := ReconcileBatch(ctx, s, accountID, []ImportedFields{in}, claimed, pol)
+	out, err := ReconcileBatch(ctx, s, accountID, []ImportedFields{in}, claimed, nil, pol)
 	if err != nil {
 		return Outcome{}, err
 	}
@@ -130,6 +130,7 @@ func ReconcileBatch(
 	accountID string,
 	in []ImportedFields,
 	claimed []*Transaction,
+	held []*Transaction,
 	pol Policy,
 ) ([]Outcome, error) {
 	out := make([]Outcome, len(in))
@@ -163,6 +164,7 @@ func ReconcileBatch(
 
 	windows := make([]int, len(model))
 	rows := make([][]Candidate, len(model))
+	twins := make([][]*Transaction, len(model))
 	assessStarted := time.Now()
 	for k, i := range model {
 		from, to := WindowBounds(in[i].Date)
@@ -170,6 +172,8 @@ func ReconcileBatch(
 		if err != nil {
 			return nil, err
 		}
+		candidates = WithHeld(candidates, held, in[i])
+		twins[k] = pol.bookedTwins(candidates, in[i])
 		windows[k] = len(candidates)
 		rows[k] = Assess(candidates, in[i], taken, pol)
 		trace.Weighed += len(rows[k])
@@ -209,6 +213,17 @@ func ReconcileBatch(
 
 		chosen, hold, reason := pol.decideAssigned(assignments[k])
 		switch {
+		case chosen != nil && !hold && chosen.Transaction.Provisional:
+			created, err := s.Create(ctx, accountID, CounterpartFields(in[i], chosen.Transaction))
+			if err != nil {
+				return nil, err
+			}
+			out[i] = Outcome{Transaction: created, Created: true, Counterpart: chosen.Transaction,
+				Best: strongest, Shadow: shadow,
+				Unchosen:        unchosen(scored, chosen.Transaction.ID),
+				Margin:          assignments[k].Margin,
+				Interchangeable: assignments[k].Interchangeable}
+
 		case chosen != nil && !hold:
 			if err := applyImported(ctx, s, chosen.Transaction, in[i], pol); err != nil {
 				return nil, err
@@ -269,6 +284,7 @@ func ReconcileBatch(
 
 		default:
 			pol.reportNearMiss(scored, assignments[k].Margin)
+			pol.reportBookedTwin(twins[k], in[i], taken)
 			created, err := s.Create(ctx, accountID, in[i])
 			if err != nil {
 				return nil, err
@@ -334,6 +350,8 @@ func (o Outcome) Name() string {
 	switch {
 	case len(o.Held) > 0:
 		return "held"
+	case o.Counterpart != nil:
+		return "adopted"
 	case o.Created:
 		return "created"
 	case o.Transaction != nil:
@@ -505,6 +523,8 @@ type Outcome struct {
 	// on: the whole point of a shadow is that it is a measurement of a change
 	// nobody has agreed to yet.
 	Shadow *ShadowOutcome
+
+	Counterpart *Transaction
 }
 
 // ShadowOutcome is one transaction's fate under a candidate parameter set.
@@ -536,6 +556,8 @@ func (o Outcome) liveOutcome() (outcome, candidateID string) {
 	switch {
 	case len(o.Held) > 0:
 		return "held", ""
+	case o.Counterpart != nil:
+		return "adopted", o.Counterpart.ID
 	case o.Created:
 		return "created", ""
 	case o.Transaction != nil:
@@ -546,7 +568,35 @@ func (o Outcome) liveOutcome() (outcome, candidateID string) {
 }
 
 // Adopted reports that an existing row was merged into rather than a new one made.
-func (o Outcome) Adopted() bool { return o.Transaction != nil && !o.Created }
+func (o Outcome) Adopted() bool {
+	return o.Transaction != nil && (!o.Created || o.Counterpart != nil)
+}
+
+func WithHeld(rows, held []*Transaction, in ImportedFields) []*Transaction {
+	if !in.Cleared || len(held) == 0 {
+		return rows
+	}
+	out := rows
+	for _, h := range held {
+		if !h.Provisional || h.Cleared || !InWindow(h.Date, in.Date) {
+			continue
+		}
+		if len(out) == len(rows) {
+			out = append([]*Transaction(nil), rows...)
+		}
+		out = append(out, h)
+	}
+	return out
+}
+
+func CounterpartFields(in ImportedFields, authorisation *Transaction) ImportedFields {
+	out := in
+	out.Date = authorisation.Date
+	if authorisation.Notes != "" {
+		out.Notes = authorisation.Notes
+	}
+	return out
+}
 
 // Policy carries the operator-tunable parts of matching. It travels as a value
 // so the two backends provably see the same rules.
@@ -639,6 +689,10 @@ type Policy struct {
 	// that trigger this cannot be reproduced here; the counters are how the
 	// affected user tells us which mechanism actually fires.
 	OnNearMiss func(reason string, candidate *Transaction)
+
+	Booked func(txnID string) bool
+
+	Sealed func(txnID, identity string) bool
 }
 
 // withinTolerance reports whether booked may be treated as the settled form of
@@ -686,6 +740,42 @@ func (p Policy) reportNearMiss(scored []Candidate, margin float64) {
 	default:
 		p.OnNearMiss("date", top.Transaction)
 	}
+}
+
+func (p Policy) alreadyBooked(c *Transaction, in ImportedFields) bool {
+	return !in.Cleared && p.Booked != nil && p.Booked(c.ID)
+}
+
+func (p Policy) sealed(c *Transaction, in ImportedFields) bool {
+	return in.Cleared && in.ExternalRef == "" && in.Identity != "" && p.Sealed != nil && p.Sealed(c.ID, in.Identity)
+}
+
+func (p Policy) bookedTwins(candidates []*Transaction, in ImportedFields) []*Transaction {
+	var out []*Transaction
+	for _, c := range candidates {
+		if (p.alreadyBooked(c, in) || p.sealed(c, in)) && adoptable(c, in.ExternalRef) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func (p Policy) reportBookedTwin(twins []*Transaction, in ImportedFields, taken []*Transaction) {
+	if len(twins) == 0 || p.OnNearMiss == nil {
+		return
+	}
+	unguarded := p
+	unguarded.Booked = nil
+	unguarded.Sealed = nil
+	scored := Assess(twins, in, taken, unguarded)
+	if len(scored) == 0 || scored[0].Probability < p.autoProbability() {
+		return
+	}
+	reason := "booked"
+	if in.Cleared {
+		reason = "booked_twin"
+	}
+	p.OnNearMiss(reason, scored[0].Transaction)
 }
 
 func adoptable(c *Transaction, ref string) bool {
@@ -979,6 +1069,9 @@ func Assess(candidates []*Transaction, in ImportedFields, alreadyMatched []*Tran
 			continue
 		}
 		if !adoptable(c, in.ExternalRef) {
+			continue
+		}
+		if pol.alreadyBooked(c, in) || pol.sealed(c, in) {
 			continue
 		}
 		survivors = append(survivors, c)

@@ -7,6 +7,8 @@
     "payee": "Nordwind Energie",
     "notes": "Erstattung",
     "entry_ref": "ref-0000e5f6a7b8",
+    "ref_source": "entry_reference",
+    "content_key": "2026-07-06|e81150e690178f1c",
     "counterparty_iban": "",
     "sepa_end_to_end": "",
     "sepa_mandate": "",

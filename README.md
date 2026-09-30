@@ -274,7 +274,7 @@ Tested against Firefly III **v6.6.6**. Check the sync history after upgrading.
 | **Rules** | bankingsync evaluates them itself, immediately, on exactly the transactions it touched | Firefly's own engine runs server-side, only on **booked** transactions. Pending ones are deliberately excluded, because a rule could strip the pending tag before the booking ever confirms it |
 | **Pending** | the `cleared` flag | a tag (`pending` by default). The tag is a display aid, not the source of truth — deleting it does not stop the transaction from being confirmed |
 | **Manual entries** | a manually entered transaction is adopted by the bank import | adopted too, **unless** it already carries an `external_id` from another importer. Then a second transaction is created rather than overwriting someone else's record |
-| **SEPA references** | not stored | `EREF`, `MREF` and `CRED` are written to `sepa_ct_id`, `sepa_db` and `sepa_ci` |
+| **SEPA references** | not stored | `EREF`, `MREF` and `CRED` are written to `sepa_ct_id`, `sepa_db` and `sepa_ci`; ING's `mandatereference:`/`creditorid:` labels count as `MREF`/`CRED` |
 | **Own transfers** | imported as a payment to a payee | when the counterparty IBAN belongs to another of your asset accounts, imported as a real `transfer` |
 | **Account matching** | by name | by IBAN first, name only as a fallback. Firefly keeps asset IBANs unique per user, so **renaming an account in Firefly is safe** — the next sync finds it again by IBAN. Under Actual the name is the only handle, so a rename has to be mirrored in the web UI |
 | **Split transactions** | untouched | if you split one of our transactions, bankingsync stops updating it rather than deleting your splits |
@@ -342,6 +342,35 @@ their first clean sync.
 the consent afterwards. Set `EB_REQUEST_BALANCE_ACCESS=false` if your bank refuses
 an authorisation request that asks for balances.
 
+### What a transaction's status does
+
+Enable Banking reports every transaction with a status. bankingsync imports what
+the bank has booked or is about to book, and nothing else:
+
+| Status | Enable Banking's meaning | What bankingsync does |
+|---|---|---|
+| `BOOK` | accounted | imported as booked |
+| `PDNG` | expected | imported as pending and cleared once its booking arrives |
+| `HOLD` | account hold | treated as `PDNG`: a hold is an authorisation |
+| `OTHR` | unknown or not fitting | imported as booked, because a bank that cannot map its own status would otherwise lose real bookings |
+| `SCHD` | scheduled | not imported; it arrives once the bank reports it as `PDNG` or `BOOK` |
+| `CNCL`, `RJCT` | cancelled, rejected | never imported |
+
+Rows left out are left out of the opening balance too, and counted in
+`bankingsync_transactions_excluded_total`.
+
+**A cancelled authorisation stays in the budget and has to be deleted by hand.**
+When the bank reports an authorisation that was already imported as pending as
+`CNCL` or `RJCT`, bankingsync stops waiting for its booking — it would otherwise
+hold the fetch window open and could be settled by an unrelated booking later.
+Neither backend lets it delete the row, so the row stays uncleared, a
+`sync.authorisation_cancelled` warning names date, amount and payee, and
+`bankingsync_authorisations_withdrawn_total` counts it. The one exception is a
+booking of the same identity in the same feed — a pre-authorisation released and
+booked again — which settles the row as usual.
+
+A row the bank delivers as `BOOK` is imported as booked, whatever its date says.
+
 ### How a transaction is recognised
 
 Before any matching happens, an incoming transaction needs an identity that
@@ -368,6 +397,38 @@ rather than a silent loss.
 
 Rows are processed in a fixed order — date, then status, then amount, payee and
 reference — so a run over the same statement is a run over the same order.
+
+**A booking without a bank reference gets an identity of its own.** The key above
+serves one purpose well — telling a pending row and its booking apart from other
+purchases — but it is not what recognises a booking delivered again. For a long
+time nothing did except the matcher, which adopted the booking's own row; and the
+matcher cannot tell "the same booking again" from "a second purchase at the same
+shop for the same amount two days later", because both produce the same
+comparison. The second purchase was merged into the first and its money was gone
+from the budget without a trace.
+
+So every booked record now carries a **content key**: a hash of the whole record
+the bank sent, minus `transaction_id` (which Enable Banking documents as liable to
+change between retrievals) and minus every field that is `null` — the API pads its
+full schema with nulls, and a schema that grows by a field must not re-identify
+every record. Records identical in every field are told apart by an occurrence
+index, as hledger does for the same reason. Once a booking is imported, a later
+delivery of the same record is a lookup, not a question for the matcher.
+
+Two rules follow, and both are listed with the hard rules below: a record already
+imported is skipped, and a booking never adopts a row that stands for another
+record **the feed can no longer deliver** — a record older than the current fetch
+window. The reach matters. A record still inside the window that comes back
+changed is most likely the same booking the bank has touched up, and there the
+matcher still settles it onto its own row (counted as
+`bankingsync_booking_identity_changed_total`); a hard rule there would turn every
+such change into a duplicate. Rows booked before this version have no content key
+and are matched as before until they leave the window.
+
+Because re-delivered bookings no longer pass through the matcher, the decision log
+and `bankingsync_match_probability` stop seeing them. They were never evidence —
+a booking settling onto its own row agrees with itself by construction — but
+dashboards show the change as a drop in volume.
 
 ### Pre-authorisations and duplicates
 
@@ -424,11 +485,34 @@ cannot outweigh the rest of the model. Below fifty transactions the correction
 stands down: a frequency drawn from a handful of rows is a coincidence, not a
 distribution.
 
-Three hard rules run **before** the model and are not probabilistic:
+Seven hard rules run **before** the model and are not probabilistic:
 
 - a bank reference that already matches is a lookup, not a guess
 - a settled row carrying somebody else's reference is never re-adopted
 - a row already settled by a bank reference in this batch is not on offer
+- an authorisation never adopts a row bankingsync itself recorded as booked.
+  The model compares every pair as authorisation first, booking second, and a
+  booking is where a card payment ends — an authorisation arriving after it is a
+  stale copy or a second purchase, never its beginning. What counts is
+  bankingsync's own record of what it booked, not the budget's cleared flag: a
+  row you typed in by hand reads as cleared in Firefly and stays adoptable. An
+  authorisation created although a booked row would otherwise have matched it
+  is counted as `bankingsync_near_miss_total{reason="booked"}`
+- an authorisation the bank still lists as pending is not settled by a booking
+  of the same key in the same feed, whatever the batch it lands in. Without a
+  bank reference the key is only day, amount and payee, and a bank that still
+  lists the authorisation has not booked it — so the booking is a second
+  purchase. A bank reference shared by both halves overrides this: then they are
+  one purchase. Each booking kept apart this way is counted as
+  `bankingsync_listed_pending_twins_total`, and a steady rate there means the
+  bank lists both halves of a purchase for a while, which leaves an uncleared
+  twin behind
+- a booking whose bank record was already imported is a lookup: it is skipped,
+  and its row is not on offer to anything else in the run
+- a booking without a bank reference never adopts a row that stands for another
+  record the feed can no longer deliver. Such a booking is a second purchase, and
+  one created although that row would otherwise have matched is counted as
+  `bankingsync_near_miss_total{reason="booked_twin"}`
 
 ### The batch is decided together
 
@@ -499,6 +583,27 @@ means without changing a figure on it — and the "this is new" answer never had
 figure to check in the first place. Both are refused when the settings have moved
 since the page was drawn.
 
+**A held authorisation still counts as a candidate for its booking.** Holding a
+transaction keeps it out of the budget, and the budget is where candidates come
+from, so for a long time an authorisation held on the Monday and its booking
+arriving the following Monday could never meet: each was listed with the other
+rows of the same shop and neither with the other. Fellegi and Sunter hold a
+*pair* for review, not a record, and a record held back has not left the pool.
+So a booking is now weighed against the authorisations waiting in the queue as
+well, within the usual window:
+
+- if the pairing clears the automatic threshold, the booking settles the held
+  authorisation on its own — one row is written for the two, dated like the
+  authorisation, and the authorisation leaves the queue
+  (`match_reviews_total{outcome="settled_by_booking", reason="automatic"}`);
+- otherwise the booking is held too, and its review lists the waiting
+  authorisation among its candidates, marked *also waiting for review*.
+  Choosing it writes one row for both and answers both questions. The
+  authorisation's own review says that its booking is waiting.
+
+Only a booking settles an authorisation, so an authorisation is never offered
+another held authorisation, and a held booking is never offered to anything.
+
 Because a held transaction is money in no budget, it is visible in five places:
 the dashboard, `/review`, `/health` (`degraded` while anything is open), the
 `bankingsync_match_reviews_open` gauge, and one email per run that held
@@ -535,7 +640,9 @@ gets written is still what the bank sent.
 
 When a transaction is created although something in the window nearly matched,
 the reason is logged and counted in `bankingsync_near_miss_total`: `amount` for a
-row close in value, `payee` for one the payee levels refused, `date` otherwise.
+row close in value, `payee` for one the payee levels refused, `date` otherwise,
+and `booked` for an authorisation that would have matched a row already booked
+(see the hard rules above).
 
 **`ambiguous` no longer appears there under the default configuration.** Two rows
 that fit equally well used to produce a duplicate and a counter tick; they are
@@ -1081,9 +1188,14 @@ on them.
 | `bankingsync_match_shadow_decisions_total` | Decisions made while a candidate parameter set was being watched, by `bank`, `backend`, `candidate` (the candidate's own parameter version) and `agreement` (`same`/`different`). The matching page reports how many a candidate would have changed; this reports when. `candidate` is on it because a counter does not reset when the watch moves on, and two candidates' tallies would otherwise add into one line describing neither |
 | `bankingsync_match_inquiry_answers_total` | Answers to the one confirmation a sync may ask for, by `bank`, `outcome` (`adopted`/`created`) and `verdict` (`same_payment`, `different_payments`, `unknown`). A `unknown` share that stays high means the questions are unanswerable, not that the matcher is fine |
 | `bankingsync_import_key_collisions_total` | Incoming transactions that would have shared an identity under an earlier import key — date and amount, without the payee — and been dropped as repeats of one another, by `bank`. Counts a defect that no longer happens, on purpose: it says whether a given feed ever reached it |
-| `bankingsync_transactions_skipped_total` | Transactions skipped (already imported) |
+| `bankingsync_transactions_skipped_total` | Transactions already in the budget, by `reason`: `reference`, `transaction_id` (imported under it by an earlier version), `content` (a booking recognised by its content), `authorisation_seen`, `authorisation_settled`, `adopted` (placed by the matcher on the row that already held it) |
 | `bankingsync_transactions_dropped_total` | Transactions Enable Banking returned that failed to parse and were dropped. A defect: it degrades the run and triggers the alert email |
 | `bankingsync_transactions_zero_amount_total` | Zero-amount transactions skipped on purpose, by `bank`. Some banks issue these routinely, so they are counted rather than treated as an error — a row without a direction has nothing to import and would match every other zero row |
+| `bankingsync_transactions_excluded_total` | Transactions not imported because of their status (`SCHD`, `CNCL`, `RJCT`), by `bank` and `status` — see [What a transaction's status does](#what-a-transactions-status-does) |
+| `bankingsync_authorisations_withdrawn_total` | Imported authorisations the bank later cancelled or rejected, by `bank` and `status`. Each one is an uncleared row to delete by hand |
+| `bankingsync_reference_source_total` | Fetched transactions by the identifier their bank supplied — `entry_reference`, `transaction_id` or none — by `bank`, `status` and `source`. Only `entry_reference` is used as a reference; a bank under `transaction_id` is recognised by content |
+| `bankingsync_listed_pending_twins_total` | Bookings kept apart from an authorisation of the same identity because the bank still lists that authorisation as pending, by `bank`. Each is an uncleared twin left in the budget |
+| `bankingsync_booking_identity_changed_total` | Bookings that settled onto a row booked for a different bank record, by `bank` — usually a record the bank changed while it was still in the fetch window |
 | `bankingsync_rules_applied_total` | Rule actions applied to new transactions |
 | `bankingsync_commit_errors_total` | Errors committing buffered changes. Actual only — Firefly is write-through and has nothing to flush |
 | `bankingsync_write_errors_total` | Per-transaction write errors against the budget backend |

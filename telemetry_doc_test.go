@@ -32,8 +32,9 @@ var (
 // maxSourceFiles bounds what the walk below is willing to call this repository.
 //
 // It exists because the failure it guards against is silence rather than an
-// error. CI sets GOMODCACHE inside the project directory, so an unfiltered walk
-// descends into the module cache: 49353 Go files instead of 126, several of them
+// error. CI used to set GOMODCACHE inside the project directory, and any setup
+// that does so again sends an unfiltered walk into the module cache: 49353 Go
+// files instead of 126, several of them
 // machine-translated C of eight to ten megabytes. Nothing fails — the regular
 // expressions simply run over four hundred times the intended input, and the
 // package times out after ten minutes with a stack in the middle of a match.
@@ -45,8 +46,8 @@ const maxSourceFiles = 500
 //
 // Directories beginning with a dot or an underscore are skipped, and so is
 // testdata, which is the rule cmd/go itself applies when deciding what belongs
-// to a module. Here it matters more than convention: the module cache and the
-// build cache both live under .cache in CI, and .git is walked otherwise too.
+// to a module. Here it matters more than convention: a module or build cache
+// under .cache is skipped with it, and .git is walked otherwise too.
 func sourceFiles(t *testing.T) map[string]string {
 	t.Helper()
 	out := map[string]string{}
