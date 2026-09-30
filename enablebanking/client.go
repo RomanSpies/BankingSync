@@ -3,7 +3,9 @@ package enablebanking
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -47,6 +49,7 @@ type Transaction struct {
 	Notes       string
 	EntryRef    string
 	RefSource   string
+	ContentKey  string
 
 	CounterpartyIBAN string
 	SEPA             SEPARefs
@@ -287,6 +290,10 @@ func (c *Client) parseTransaction(t map[string]any) (Transaction, error) {
 	if status == "" {
 		status = "BOOK"
 	}
+	var content string
+	if status != "PDNG" {
+		content = contentKey(t, date)
+	}
 	return Transaction{
 		Status:           status,
 		Date:             date,
@@ -296,6 +303,7 @@ func (c *Client) parseTransaction(t map[string]any) (Transaction, error) {
 		Notes:            notes,
 		EntryRef:         ref,
 		RefSource:        refSource(t),
+		ContentKey:       content,
 		CounterpartyIBAN: parseCounterpartyIBAN(t),
 		SEPA:             sepa,
 	}, nil
@@ -435,6 +443,56 @@ func parseNotesAndSEPA(t map[string]any) (string, SEPARefs) {
 		return parseSEPA(ref)
 	}
 	return joinRemittanceAndSEPA(t)
+}
+
+func contentKey(t map[string]any, date time.Time) string {
+	record := make(map[string]any, len(t))
+	for k, v := range t {
+		if k != "transaction_id" {
+			record[k] = v
+		}
+	}
+	canonical, err := json.Marshal(withoutNulls(record))
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(canonical)
+	return reachDate(t, date).Format("2006-01-02") + "|" + hex.EncodeToString(sum[:8])
+}
+
+func withoutNulls(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			if e != nil {
+				out[k] = withoutNulls(e)
+			}
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = withoutNulls(e)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+func reachDate(t map[string]any, fallback time.Time) time.Time {
+	latest := fallback
+	for _, field := range []string{"transaction_date", "booking_date", "value_date"} {
+		raw, _ := t[field].(string)
+		if len(raw) >= 10 {
+			raw = raw[:10]
+		}
+		if d, err := time.Parse("2006-01-02", raw); err == nil && d.After(latest) {
+			latest = d
+		}
+	}
+	return latest
 }
 
 func refSource(t map[string]any) string {

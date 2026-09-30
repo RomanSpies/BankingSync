@@ -21,6 +21,7 @@ type goldenTxn struct {
 	Notes            string `json:"notes"`
 	EntryRef         string `json:"entry_ref"`
 	RefSource        string `json:"ref_source"`
+	ContentKey       string `json:"content_key"`
 	CounterpartyIBAN string `json:"counterparty_iban"`
 	SEPAEndToEnd     string `json:"sepa_end_to_end"`
 	SEPAMandate      string `json:"sepa_mandate"`
@@ -37,6 +38,7 @@ func toGolden(t Transaction) goldenTxn {
 		Notes:            t.Notes,
 		EntryRef:         t.EntryRef,
 		RefSource:        t.RefSource,
+		ContentKey:       t.ContentKey,
 		CounterpartyIBAN: t.CounterpartyIBAN,
 		SEPAEndToEnd:     t.SEPA.EndToEnd,
 		SEPAMandate:      t.SEPA.Mandate,
