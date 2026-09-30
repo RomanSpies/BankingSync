@@ -424,7 +424,7 @@ cannot outweigh the rest of the model. Below fifty transactions the correction
 stands down: a frequency drawn from a handful of rows is a coincidence, not a
 distribution.
 
-Four hard rules run **before** the model and are not probabilistic:
+Five hard rules run **before** the model and are not probabilistic:
 
 - a bank reference that already matches is a lookup, not a guess
 - a settled row carrying somebody else's reference is never re-adopted
@@ -437,6 +437,15 @@ Four hard rules run **before** the model and are not probabilistic:
   row you typed in by hand reads as cleared in Firefly and stays adoptable. An
   authorisation created although a booked row would otherwise have matched it
   is counted as `bankingsync_near_miss_total{reason="booked"}`
+- an authorisation the bank still lists as pending is not settled by a booking
+  of the same key in the same feed, whatever the batch it lands in. Without a
+  bank reference the key is only day, amount and payee, and a bank that still
+  lists the authorisation has not booked it — so the booking is a second
+  purchase. A bank reference shared by both halves overrides this: then they are
+  one purchase. Each booking kept apart this way is counted as
+  `bankingsync_listed_pending_twins_total`, and a steady rate there means the
+  bank lists both halves of a purchase for a while, which leaves an uncleared
+  twin behind
 
 ### The batch is decided together
 

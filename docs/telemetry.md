@@ -225,6 +225,7 @@ and a dashboard should say so in a panel description rather than imply freshness
 | `bankingsync_match_shadow_decisions_total` | counter | `bank`, `backend`, `candidate`, `agreement` | Decisions made while a candidate parameter set was being watched. |
 | `bankingsync_match_multiplicity_total` | counter | `bank`, `backend` | Transactions settled onto one of several rows nothing could tell apart. |
 | `bankingsync_near_miss_total` | counter | `bank`, `backend`, `reason` | Transactions created although an open row nearly matched. |
+| `bankingsync_listed_pending_twins_total` | counter | `bank` | Bookings kept apart from an authorisation of the same key because the bank still lists that authorisation as pending in the same feed. A bank that briefly lists both halves of one purchase shows up here as a steady rate, and each tick is an uncleared twin left in the budget. |
 | `bankingsync_reference_source_total` | counter | `bank`, `status`, `source` | Fetched transactions by the field their bank reference was taken from. Counted per fetched record per run, so a re-delivered transaction counts again; the ratio between sources is what matters. |
 
 Label values:

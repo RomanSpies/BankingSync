@@ -309,6 +309,25 @@ func importKeys(txns []enablebanking.Transaction, prefixes []string) (keys []str
 // this key, and its booking now computes a different one — without the fallback
 // the authorisation would go unrecognised and be imported a second time. The
 // scheme disappears on its own once the retention window has passed over it.
+func listedPendingKeys(txns []enablebanking.Transaction, keys []string) map[string]bool {
+	listed := map[string]bool{}
+	for i, t := range txns {
+		if t.Status != "PDNG" || t.EntryRef != "" {
+			continue
+		}
+		listed[keys[i]] = true
+		listed[legacyImportKey(t.Date, t.AmountCents)] = true
+	}
+	return listed
+}
+
+func (s *Syncer) countListedPendingTwin(ctx context.Context, label, key string) {
+	log.Printf("[%s] Booking %s left apart from the authorisation of the same key, which the bank still lists as pending", label, key)
+	if s.met != nil && s.met.listedPendingTwins != nil {
+		s.met.listedPendingTwins.Add(ctx, 1, metric.WithAttributes(attribute.String("bank", label)))
+	}
+}
+
 func legacyImportKey(date time.Time, amountCents int64) string {
 	return fmt.Sprintf("%s|%s", date.Format("2006-01-02"), centsToDecimal(amountCents))
 }
@@ -1112,6 +1131,7 @@ func (s *Syncer) run() bool {
 		}
 
 		txnKeys, keyCollisions := importKeys(rawTxns, pol.PayeePrefixes)
+		listed := listedPendingKeys(rawTxns, txnKeys)
 		if keyCollisions > 0 {
 			log.Printf("[%s] %d transaction(s) would have shared an identity under the "+
 				"pre-v3 import key and been dropped", label, keyCollisions)
@@ -1368,7 +1388,12 @@ func (s *Syncer) run() bool {
 					}
 				}
 
-				if matchedKey, pendingVal, inPending := s.pendingEntry(acct.ID, pendingKey, legacyKey); inPending {
+				matchedKey, pendingVal, inPending := s.pendingEntry(acct.ID, pendingKey, legacyKey)
+				if inPending && listed[matchedKey] {
+					inPending = false
+					s.countListedPendingTwin(ctx, label, pendingKey)
+				}
+				if inPending {
 					txnID, _ := splitPendingVal(pendingVal)
 					existingTxn := knownByID[txnID]
 
@@ -1816,7 +1841,7 @@ func measureFieldWidth(txns []enablebanking.Transaction) (width int, truncating 
 // costs nothing in practice and buys two things that matter: bounded memory on a
 // first sync of years of history, and a resume point that keeps advancing when a
 // long backfill runs out of time.
-const assignBatchSize = 200
+var assignBatchSize = 200
 
 // workKind is which of the sync loop's paths set a transaction aside, and so
 // which bookkeeping follows once it has been placed.
