@@ -1396,6 +1396,16 @@ func (s *Syncer) run() bool {
 					if _, seen := s.state.BookedUnder(acct.ID, booked.Identity); seen {
 						s.countReferenceChanged(ctx, label)
 					}
+				} else if txnID, seen := s.state.BookedUnder(acct.ID, booked.Identity); seen {
+					claim := knownByID[txnID]
+					if claim == nil {
+						claim = &budget.Transaction{ID: txnID}
+					}
+					matchedThisRun = append(matchedThisRun, claim)
+					s.recordIdentity(ctx, label, acct, booked.Identity, txnID, ref)
+					skipped++
+					acctSkipped++
+					continue
 				}
 
 				matchedKey, pendingVal, inPending := s.pendingEntry(acct.ID, pendingKey, legacyKey)

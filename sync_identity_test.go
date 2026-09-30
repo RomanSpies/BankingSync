@@ -169,3 +169,69 @@ func TestSync_aBookingWhoseTransactionIDChangedIsCounted(t *testing.T) {
 		t.Fatalf("reference_changed_total = %v; the same record under a new transaction_id must be counted", got)
 	}
 }
+
+func TestSync_aRedeliveredBookingBesideItsTwinIsNotHeld(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(8))
+		h.reloadState(t)
+		monday := bookedTxnPayee("", daysAgo(5), "3.50", "Cafe Sonne")
+		wednesday := bookedTxnPayee("", daysAgo(3), "3.50", "Cafe Sonne")
+
+		h.eb.setPages([][]map[string]any{{monday}})
+		h.syncer.run()
+		h.eb.setPages([][]map[string]any{{monday, wednesday}})
+		h.syncer.run()
+
+		if n := len(h.actualTxns(t)); n != 2 {
+			t.Fatalf("%d rows, want Monday's and Wednesday's purchase", n)
+		}
+		if n, _ := h.st.CountMatchReviews(); n != 0 {
+			t.Fatalf("%d reviews; Monday's booking was delivered again and is a lookup, not a question", n)
+		}
+	})
+}
+
+func TestSync_aRedeliveredBookingIsSkippedWithoutConsultingTheModel(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(8))
+		h.reloadState(t)
+		monday := bookedTxnPayee("", daysAgo(5), "3.50", "Cafe Sonne")
+
+		h.eb.setPages([][]map[string]any{{monday}})
+		h.syncer.run()
+		before, _ := h.st.CountMatchDecisions()
+		h.eb.setPages([][]map[string]any{{monday}})
+		h.syncer.run()
+		after, _ := h.st.CountMatchDecisions()
+
+		if n := len(h.actualTxns(t)); n != 1 {
+			t.Fatalf("%d rows after the same booking was delivered twice, want 1", n)
+		}
+		if after != before {
+			t.Fatalf("%d decisions recorded for a booking already imported; its own row is not evidence about the model", after-before)
+		}
+	})
+}
+
+func TestSync_twoIdenticalBookingsOnOneDayStayTwoAcrossRuns(t *testing.T) {
+	forEachBackend(t, func(t *testing.T, h *harness) {
+		h.addAccount(t, "")
+		_ = h.st.SetLastSyncDate(daysAgo(8))
+		h.reloadState(t)
+		coffee := bookedTxnPayee("", daysAgo(2), "3.50", "Cafe Sonne")
+
+		for _, feed := range [][]map[string]any{{coffee}, {coffee, coffee}, {coffee, coffee}} {
+			h.eb.setPages([][]map[string]any{feed})
+			h.syncer.run()
+		}
+
+		if n := len(h.actualTxns(t)); n != 2 {
+			t.Fatalf("%d rows, want the two purchases the bank reported", n)
+		}
+		if n, _ := h.st.CountMatchReviews(); n != 0 {
+			t.Fatalf("%d reviews, want none", n)
+		}
+	})
+}
