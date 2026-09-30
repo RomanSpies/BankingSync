@@ -3,16 +3,41 @@ default:
   tags:
     - go
   before_script:
+    # The Go caches live in the runner user's home, not under $CI_PROJECT_DIR.
+    # The executor is a shell executor on one persistent host, so these
+    # directories survive between jobs on their own; there is nothing to archive.
+    #
+    # They used to sit in $CI_PROJECT_DIR/.cache/go because GitLab's cache: can
+    # only carry paths inside the project directory. That bought nothing -- the
+    # cache is stored locally, so every job tarred and untarred it from one
+    # directory of this disk into another -- and it put the whole module cache
+    # inside the tree that gofmt, gosec, trivy and Sonar all walk. The .cache
+    # exclusions and the chmod that used to run after every job existed for that
+    # one reason. Nothing prunes $HOME/go now; a `go clean -modcache` on the
+    # runner every few months is the whole maintenance story.
+    - export GOPATH="$HOME/go"
+    - export GOMODCACHE="$GOPATH/pkg/mod"
+    - export GOCACHE="$HOME/.cache/go-build"
     - export PATH="$GOPATH/bin:$PATH"
-  after_script:
-    - chmod -R u+w "$GOMODCACHE" || true
 
 variables:
-  GOPATH: "$CI_PROJECT_DIR/.cache/go"
-  GOMODCACHE: "$CI_PROJECT_DIR/.cache/go/pkg/mod"
-  GOCACHE: "$CI_PROJECT_DIR/.cache/go/build"
   GOFLAGS: "-mod=readonly"
-  GOTOOLCHAIN: "local"
+  # Pinned instead of "local": a runner update must not silently change the
+  # toolchain underneath the tests and the linters. The toolchain is fetched
+  # through the module proxy and kept with the module cache. The Dockerfile's
+  # builder image names the same version, so what is tested is what ships.
+  GOTOOLCHAIN: "go1.27.1"
+  # Every tool this pipeline installs is pinned for the same reason, and installed
+  # unconditionally rather than behind a `which`: a `which` hit means whatever
+  # version happened to land in GOPATH/bin first, which is exactly the drift the
+  # pin is meant to remove. `go install` of a version already built is a no-op.
+  GOTESTSUM_VERSION: "v1.13.0"
+  GOCOVER_COBERTURA_VERSION: "v1.5.0"
+  STATICCHECK_VERSION: "v0.8.1"
+  GOSEC_VERSION: "v2.29.0"
+  # On the v2 module path. Without the /v2 the proxy resolves @latest to the last
+  # v1, whose bundled go/types cannot read export data from a current toolchain.
+  GOLANGCI_LINT_VERSION: "v2.14.0"
   SONARQUBE: "$CI_PROJECT_DIR/sonarqube"
   # Major version. Bumping it also requires no change in update.go: the tag
   # pattern there accepts any major on purpose, so a bump does not silently
@@ -32,28 +57,17 @@ stages:
   - sonar
   - docker
 
-.go-cache: &go-cache
-  cache:
-    key:
-      files:
-        - go.sum
-    paths:
-      - .cache/go/pkg/mod
-      - .cache/go/build
-
 build:
   stage: build
-  <<: *go-cache
   script:
     - go build ./...
 
 unit-tests:
   stage: test
-  <<: *go-cache
   needs: [build]
   script:
     - mkdir -p "$SONARQUBE"
-    - which gotestsum || go install gotest.tools/gotestsum@latest
+    - go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}"
     - gotestsum --format standard-verbose --jsonfile "$SONARQUBE/test-report.json" --junitfile "$SONARQUBE/junit-report.xml" -- -count=1 -race -coverprofile=coverage.out -covermode=atomic ./...
     - go tool cover -func=coverage.out | tail -1
   coverage: '/^total:\s+\(statements\)\s+(\d+\.\d+)%/'
@@ -72,10 +86,9 @@ unit-tests:
 
 coverage-xml:
   stage: test
-  <<: *go-cache
   needs: [unit-tests]
   script:
-    - which gocover-cobertura || go install github.com/boumenot/gocover-cobertura@latest
+    - go install "github.com/boumenot/gocover-cobertura@${GOCOVER_COBERTURA_VERSION}"
     - gocover-cobertura < coverage.out > coverage.xml
   artifacts:
     reports:
@@ -86,7 +99,6 @@ coverage-xml:
 
 go-vet:
   stage: sast
-  <<: *go-cache
   needs: [build]
   script:
     - go vet ./...
@@ -101,52 +113,57 @@ go-vet:
 
 staticcheck:
   stage: sast
-  <<: *go-cache
   needs: [build]
   allow_failure: true
   script:
-    - which staticcheck || go install honnef.co/go/tools/cmd/staticcheck@latest
+    - go install "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"
     - staticcheck ./...
 
+# Findings and the tool breaking used to be one outcome: `allow_failure: true`
+# plus `|| true` made every exit code green. Findings stay non-blocking because
+# they travel to Sonar (-no-fail), while a run that leaves no report fails the job
+# and with it the Sonar gate. gosec exits 1 for a processing error as well as for
+# a finding, so -no-fail cannot tell the two apart; the report check is what can.
 gosec:
   stage: sast
-  <<: *go-cache
   needs: [build]
-  allow_failure: true
   script:
     - mkdir -p "$SONARQUBE"
-    - which gosec || go install github.com/securego/gosec/v2/cmd/gosec@latest
-    - gosec -exclude-dir .cache -fmt sarif -out "$SONARQUBE/gosec.sarif" -severity medium ./... || true
+    - go install "github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}"
+    - gosec -no-fail -fmt sarif -out "$SONARQUBE/gosec.sarif" -severity medium ./...
+    - test -s "$SONARQUBE/gosec.sarif" || { echo "gosec wrote no report"; exit 1; }
   artifacts:
     when: always
     paths:
       - sonarqube/gosec.sarif
     expire_in: 7 days
 
+# Same split as gosec: findings are non-blocking because they travel to Sonar
+# (--issues-exit-code=0), while a broken run fails the job and with it the gate.
 golangci-lint:
   stage: sast
-  <<: *go-cache
   needs: [build]
-  allow_failure: true
-  variables:
-    # Pinned, and on the v2 module path. Without the /v2 the proxy resolves
-    # @latest to the last v1, whose bundled go/types cannot read export data
-    # from a current toolchain — every package then fails to load and the
-    # typecheck pseudo-linter reports the fallout as "undefined: rand" and
-    # "missing type in composite literal" against code that compiles.
-    GOLANGCI_VERSION: "2.13.2"
   script:
     - mkdir -p "$SONARQUBE"
-    # Checked by version, not by existence. GOPATH lives under the cached
-    # $CI_PROJECT_DIR/.cache, so `which golangci-lint ||` kept an old binary
-    # alive across pipelines for months and the job stayed green throughout.
-    - golangci-lint --version 2>/dev/null | grep -q "$GOLANGCI_VERSION"
-        || go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$GOLANGCI_VERSION"
+    - go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
+    - golangci-lint version
     # The report is written by the flag rather than by redirecting stdout, so a
     # crash in the linter leaves no output instead of writing its stack trace
-    # into the file Sonar parses as XML.
-    - golangci-lint run --output.checkstyle.path="$SONARQUBE/golangci-checkstyle.xml" ./... || true
-    - test -s "$SONARQUBE/golangci-checkstyle.xml" || echo "<checkstyle/>" > "$SONARQUBE/golangci-checkstyle.xml"
+    # into the file Sonar parses as XML. Naming a checkstyle path silences the
+    # default stdout report, so the text output is named as well, or the findings
+    # would reach Sonar and never the job log.
+    - golangci-lint run --issues-exit-code=0
+        --output.text.path=stdout
+        --output.checkstyle.path="$SONARQUBE/golangci-checkstyle.xml" ./...
+    # A typecheck entry means the packages never loaded and no linter ran at all;
+    # Sonar would show that as one odd finding on an untouched line. This is the
+    # failure an unpinned v1 binary produced as "undefined: rand" against code
+    # that compiles.
+    - |
+      if grep -q 'source="typecheck"' "$SONARQUBE/golangci-checkstyle.xml"; then
+        echo "golangci-lint could not type-check the packages (linter/toolchain mismatch?)"
+        exit 1
+      fi
   artifacts:
     when: always
     paths:
@@ -189,7 +206,7 @@ sonar-job:
         -Dsonar.token=$SONAR_TOKEN
         -Dsonar.projectKey=$SONAR_PROJECT_KEY
         -Dsonar.sources=.
-        -Dsonar.exclusions=**/*_test.go,**/.cache/**
+        -Dsonar.exclusions=**/*_test.go
         -Dsonar.tests=.
         -Dsonar.test.inclusions=**/*_test.go
         -Dsonar.coverage.exclusions=main.go,telemetry.go,email.go
@@ -201,7 +218,6 @@ sonar-job:
 
 firefly-integration:
   stage: test
-  <<: *go-cache
   needs: [build]
   # Serialises with itself across pipelines: two Firefly stacks on one shell
   # runner is both a port fight and a CPU fight.
@@ -239,7 +255,7 @@ firefly-integration:
     - export FIREFLY_LIVE_URL="http://127.0.0.1:${FIREFLY_HOST_PORT}"
     - export FIREFLY_LIVE_RUN_ID="${CI_PIPELINE_ID}-${CI_JOB_ID}"
     - export FIREFLY_LIVE_DESTRUCTIVE=yes
-    - which gotestsum || go install gotest.tools/gotestsum@latest
+    - go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}"
     # Two invocations because the two packages need different filters. The root
     # package runs the shared sync harness, where "live" is a subtest of every
     # scenario; ./firefly runs the store-level tests, which are top-level and
@@ -274,10 +290,6 @@ firefly-integration:
         echo "reaping leftover CI containers: $stale"
         docker rm -f -v $stale || true
       fi
-    # A job-level after_script REPLACES the one from default:, so the module
-    # cache fixup has to be repeated here or every later job in this build finds
-    # it read-only.
-    - chmod -R u+w "$GOMODCACHE" || true
   artifacts:
     when: always
     reports:
@@ -343,8 +355,13 @@ gofmt:
   stage: sast
   needs: []
   script:
+    # The gofmt on PATH belongs to the runner's own Go, not to the pinned
+    # toolchain, so it is the one binary here a runner update could still change.
+    # After a toolchain switch `go env GOROOT` names the toolchain in use, which
+    # is where its gofmt sits.
+    - go version
     - |
-      unformatted=$(gofmt -l .)
+      unformatted=$("$(go env GOROOT)/bin/gofmt" -l .)
       if [ -n "$unformatted" ]; then
         echo "The following files are not gofmt'd:"
         echo "$unformatted"
