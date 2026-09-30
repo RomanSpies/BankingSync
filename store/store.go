@@ -1355,6 +1355,7 @@ type ResolvedComparison struct {
 	DateLevel   string
 	Weight      float64
 	Probability float64
+	Candidates  int
 }
 
 // SetMatchDecisionResolution records a review answer against the candidate the
@@ -1379,14 +1380,14 @@ func (s *Store) SetMatchDecisionResolution(bankAccountID int64, pendingKey strin
 	res, err := s.db.Exec(`
 		UPDATE match_decisions
 		SET truth = ?, candidate_id = ?, payee_level = ?, amount_level = ?,
-		    date_level = ?, weight = ?, probability = ?
+		    date_level = ?, weight = ?, probability = ?, candidates = ?
 		WHERE id = (
 			SELECT id FROM match_decisions
 			WHERE bank_account_id = ? AND pending_key = ? AND pending_key != ''
 			ORDER BY id DESC LIMIT 1
 		)`,
 		boolToInt(correct), c.CandidateID, c.PayeeLevel, c.AmountLevel,
-		c.DateLevel, c.Weight, c.Probability, bankAccountID, pendingKey)
+		c.DateLevel, c.Weight, c.Probability, c.Candidates, bankAccountID, pendingKey)
 	if err != nil {
 		return err
 	}

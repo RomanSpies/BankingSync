@@ -565,6 +565,7 @@ func (s *Syncer) recordReviewAnswer(r store.MatchReview, created bool, chosen *b
 			DateLevel:   chosen.Comparison.Date.String(),
 			Weight:      chosen.Weight,
 			Probability: chosen.Probability,
+			Candidates:  chosen.Plausible,
 		})
 }
 

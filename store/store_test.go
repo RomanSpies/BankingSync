@@ -1964,3 +1964,29 @@ func TestStore_resettingTheImportStateForgetsBookedRows(t *testing.T) {
 		t.Fatalf("a reset declares nothing imported, yet booked rows survived: %v", rows)
 	}
 }
+
+func TestStore_aResolutionRecordsTheCandidateCountItWasScoredWith(t *testing.T) {
+	st := openTestStore(t)
+	if err := st.AddMatchDecision(store.MatchDecision{
+		RunID: "run-1", BankAccountID: 1, Bank: "TestBank", PendingKey: "k-1",
+		PayeeLevel: "exact", AmountLevel: "exact", DateLevel: "same", Candidates: 5,
+		Outcome: "held", ParamVersion: "abc123", TxnDate: time.Now().UTC().Format("2006-01-02"),
+	}); err != nil {
+		t.Fatalf("AddMatchDecision: %v", err)
+	}
+
+	if err := st.SetMatchDecisionResolution(1, "k-1", true, store.ResolvedComparison{
+		CandidateID: "row-2", PayeeLevel: "truncated", AmountLevel: "exact", DateLevel: "after_far",
+		Weight: 4.2, Probability: 0.95, Candidates: 2,
+	}); err != nil {
+		t.Fatalf("SetMatchDecisionResolution: %v", err)
+	}
+
+	labelled, err := st.GetLabelledMatchDecisions(10)
+	if err != nil || len(labelled) != 1 {
+		t.Fatalf("GetLabelledMatchDecisions: %v, %d rows", err, len(labelled))
+	}
+	if got := labelled[0].Candidates; got != 2 {
+		t.Fatalf("candidates %d; the refit weighs the chosen pair's levels with the count they were scored under, 2", got)
+	}
+}
