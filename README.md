@@ -369,6 +369,38 @@ rather than a silent loss.
 Rows are processed in a fixed order — date, then status, then amount, payee and
 reference — so a run over the same statement is a run over the same order.
 
+**A booking without a bank reference gets an identity of its own.** The key above
+serves one purpose well — telling a pending row and its booking apart from other
+purchases — but it is not what recognises a booking delivered again. For a long
+time nothing did except the matcher, which adopted the booking's own row; and the
+matcher cannot tell "the same booking again" from "a second purchase at the same
+shop for the same amount two days later", because both produce the same
+comparison. The second purchase was merged into the first and its money was gone
+from the budget without a trace.
+
+So every booked record now carries a **content key**: a hash of the whole record
+the bank sent, minus `transaction_id` (which Enable Banking documents as liable to
+change between retrievals) and minus every field that is `null` — the API pads its
+full schema with nulls, and a schema that grows by a field must not re-identify
+every record. Records identical in every field are told apart by an occurrence
+index, as hledger does for the same reason. Once a booking is imported, a later
+delivery of the same record is a lookup, not a question for the matcher.
+
+Two rules follow, and both are listed with the hard rules below: a record already
+imported is skipped, and a booking never adopts a row that stands for another
+record **the feed can no longer deliver** — a record older than the current fetch
+window. The reach matters. A record still inside the window that comes back
+changed is most likely the same booking the bank has touched up, and there the
+matcher still settles it onto its own row (counted as
+`bankingsync_booking_identity_changed_total`); a hard rule there would turn every
+such change into a duplicate. Rows booked before this version have no content key
+and are matched as before until they leave the window.
+
+Because re-delivered bookings no longer pass through the matcher, the decision log
+and `bankingsync_match_probability` stop seeing them. They were never evidence —
+a booking settling onto its own row agrees with itself by construction — but
+dashboards show the change as a drop in volume.
+
 ### Pre-authorisations and duplicates
 
 A card payment often arrives twice in different clothes: authorised as
@@ -424,7 +456,7 @@ cannot outweigh the rest of the model. Below fifty transactions the correction
 stands down: a frequency drawn from a handful of rows is a coincidence, not a
 distribution.
 
-Five hard rules run **before** the model and are not probabilistic:
+Seven hard rules run **before** the model and are not probabilistic:
 
 - a bank reference that already matches is a lookup, not a guess
 - a settled row carrying somebody else's reference is never re-adopted
@@ -446,6 +478,12 @@ Five hard rules run **before** the model and are not probabilistic:
   `bankingsync_listed_pending_twins_total`, and a steady rate there means the
   bank lists both halves of a purchase for a while, which leaves an uncleared
   twin behind
+- a booking whose bank record was already imported is a lookup: it is skipped,
+  and its row is not on offer to anything else in the run
+- a booking without a bank reference never adopts a row that stands for another
+  record the feed can no longer deliver. Such a booking is a second purchase, and
+  one created although that row would otherwise have matched is counted as
+  `bankingsync_near_miss_total{reason="booked_twin"}`
 
 ### The batch is decided together
 
