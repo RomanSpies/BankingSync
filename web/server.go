@@ -612,6 +612,7 @@ func (s *Server) finishAuth(w http.ResponseWriter, r *http.Request, sr *enableba
 	_ = s.st.SetSetting("pending_renew_account_id", "")
 	_ = s.st.SetSetting("pending_auth_url", "")
 
+	var renewing store.BankAccount
 	if renewAccountID != "" {
 		id, err := strconv.ParseInt(renewAccountID, 10, 64)
 		existing, found := s.bankAccount(id)
@@ -619,17 +620,35 @@ func (s *Server) finishAuth(w http.ResponseWriter, r *http.Request, sr *enableba
 			http.Redirect(w, r, "/connect?error="+urlEncode("Renewal failed: the account being renewed no longer exists"), http.StatusFound)
 			return
 		}
-		if a, ok := matchRenewal(existing, sr.Accounts); ok {
-			if err := s.st.RenewBankAccountSession(id, renewalFrom(a, sr.SessionID, expiry)); err != nil {
+		renewing = existing
+	}
+
+	taken, err := s.carrySiblings(r.Context(), bankName, bankCountry, sr, expiry)
+	if err != nil {
+		http.Redirect(w, r, "/connect?error="+urlEncode("Moving the connected accounts failed: "+err.Error()), http.StatusFound)
+		return
+	}
+	remaining := without(sr.Accounts, taken)
+
+	if renewAccountID != "" {
+		a, ok, decided := strongMatch(renewing, sr.Accounts)
+		if !decided && len(remaining) == 1 {
+			a, ok = remaining[0], true
+		}
+		if ok {
+			if err := s.st.RenewBankAccountSession(renewing.ID, renewalFrom(a, sr.SessionID, expiry)); err != nil {
 				http.Redirect(w, r, "/connect?error="+urlEncode("Renewal failed: "+err.Error()), http.StatusFound)
 				return
 			}
 			http.Redirect(w, r, "/status", http.StatusFound)
 			return
 		}
+	} else if len(remaining) == 0 {
+		http.Redirect(w, r, "/status", http.StatusFound)
+		return
 	}
 
-	accountsJSON, _ := json.Marshal(sr.Accounts)
+	accountsJSON, _ := json.Marshal(remaining)
 	_ = s.st.SetSetting("pending_auth_renew_account_id", renewAccountID)
 	_ = s.st.SetSetting("pending_auth_session_id", sr.SessionID)
 	_ = s.st.SetSetting("pending_auth_accounts", string(accountsJSON))
@@ -717,21 +736,75 @@ func findAccount(accounts []enablebanking.SessionAccount, uid string) (enableban
 // It reports false rather than guess when the evidence names no account or more
 // than one; the caller then asks which one it is.
 func matchRenewal(existing store.BankAccount, offered []enablebanking.SessionAccount) (enablebanking.SessionAccount, bool) {
-	if existing.IdentificationHash != "" && offersAny(offered, func(a enablebanking.SessionAccount) string { return a.IdentificationHash }) {
-		return only(offered, func(a enablebanking.SessionAccount) bool {
-			return a.IdentificationHash == existing.IdentificationHash
-		})
-	}
-	if existing.IBAN != "" && offersAny(offered, func(a enablebanking.SessionAccount) string { return a.IBAN }) {
-		return only(offered, func(a enablebanking.SessionAccount) bool {
-			return a.IBAN == existing.IBAN &&
-				(existing.Currency == "" || a.Currency == "" || strings.EqualFold(a.Currency, existing.Currency))
-		})
+	if a, ok, decided := strongMatch(existing, offered); decided {
+		return a, ok
 	}
 	if len(offered) == 1 {
 		return offered[0], true
 	}
 	return enablebanking.SessionAccount{}, false
+}
+
+func strongMatch(existing store.BankAccount, offered []enablebanking.SessionAccount) (match enablebanking.SessionAccount, ok, decided bool) {
+	if existing.IdentificationHash != "" && offersAny(offered, func(a enablebanking.SessionAccount) string { return a.IdentificationHash }) {
+		match, ok = only(offered, func(a enablebanking.SessionAccount) bool {
+			return a.IdentificationHash == existing.IdentificationHash
+		})
+		return match, ok, true
+	}
+	if existing.IBAN != "" && offersAny(offered, func(a enablebanking.SessionAccount) string { return a.IBAN }) {
+		match, ok = only(offered, func(a enablebanking.SessionAccount) bool {
+			return a.IBAN == existing.IBAN &&
+				(existing.Currency == "" || a.Currency == "" || strings.EqualFold(a.Currency, existing.Currency))
+		})
+		return match, ok, true
+	}
+	return enablebanking.SessionAccount{}, false, false
+}
+
+func sameBank(a store.BankAccount, bankName, bankCountry string) bool {
+	return strings.EqualFold(strings.TrimSpace(a.BankName), strings.TrimSpace(bankName)) &&
+		strings.EqualFold(strings.TrimSpace(a.BankCountry), strings.TrimSpace(bankCountry))
+}
+
+func (s *Server) carrySiblings(ctx context.Context, bankName, bankCountry string, sr *enablebanking.SessionResponse, expiry string) (map[string]bool, error) {
+	accounts, err := s.st.GetAllBankAccounts()
+	if err != nil {
+		return nil, err
+	}
+	taken := map[string]bool{}
+	moved := 0
+	for _, a := range accounts {
+		if !sameBank(a, bankName, bankCountry) {
+			continue
+		}
+		match, ok, decided := strongMatch(a, sr.Accounts)
+		if !decided || !ok {
+			continue
+		}
+		if err := s.st.RenewBankAccountSession(a.ID, renewalFrom(match, sr.SessionID, expiry)); err != nil {
+			return taken, err
+		}
+		taken[match.EffectiveUID()] = true
+		moved++
+	}
+	if moved > 0 {
+		log.Printf("[%s] %d connected account(s) moved onto the new authorisation", bankName, moved)
+		olog.Info(ctx, "session.accounts_moved",
+			logs.String("bank", bankName),
+			logs.Int("moved", moved))
+	}
+	return taken, nil
+}
+
+func without(offered []enablebanking.SessionAccount, taken map[string]bool) []enablebanking.SessionAccount {
+	out := make([]enablebanking.SessionAccount, 0, len(offered))
+	for _, a := range offered {
+		if !taken[a.EffectiveUID()] {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func offersAny(offered []enablebanking.SessionAccount, field func(enablebanking.SessionAccount) string) bool {

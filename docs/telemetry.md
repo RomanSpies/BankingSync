@@ -550,7 +550,7 @@ Every record the program can emit, by area:
 |---|---|
 | `sync` | `sync.started` (I), `sync.finished` (I), `sync.authorisation_cancelled` (W) — an imported authorisation the bank cancelled or rejected; its uncleared row has to be deleted by hand |
 | `fetch_transactions` | `.completed` (I), `.failed` (E) |
-| `session` | `session.ended` (W) — the bank reported the account's session over (`reason` carries its code, e.g. `CLOSED_SESSION`); the account is skipped until it is renewed |
+| `session` | `session.ended` (W) — the bank reported the account's session over (`reason` carries its code, e.g. `CLOSED_SESSION`); the account is skipped until it is renewed. `session.accounts_moved` (I) — a new authorisation at a bank took over `moved` accounts already connected there, recognised by identification hash or IBAN, because many banks end the previous session when a new one is authorised |
 | `import` | `import.batch.completed` (I) |
 | `transaction` / `transactions` | `transaction.parse.failed` (W), `transactions.dropped` (E) |
 | `match` | `match.held_for_review` (W), `match.near_miss` (W), `match.hold_failed` (E), `match.review_resolved` (I), `match.review_settled_by_booking` (I), `match.inquiry_raised` (I), `match.inquiry_answered` (I), `match.trial_watched` (I), `match.trial_promoted` (I), `match.trial_reverted` (I), `match.trial_dropped` (I), `match.decision_not_recorded` (W), `match.inquiry_not_recorded` (W), `match.usample_not_recorded` (W) |
