@@ -1855,7 +1855,7 @@ func TestMarkSessionEnded_keepsTheFirstReport(t *testing.T) {
 	st := openTestStore(t)
 	id, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s", AccountUID: "u", BankName: "B", BankCountry: "DE", SessionExpiry: "2099-01-01T00:00:00Z"})
 
-	if err := st.MarkSessionEnded(id, "CLOSED_SESSION"); err != nil {
+	if err := st.MarkSessionEnded(id, "s", "CLOSED_SESSION"); err != nil {
 		t.Fatalf("MarkSessionEnded: %v", err)
 	}
 	first, _ := st.GetAllBankAccounts()
@@ -1864,7 +1864,7 @@ func TestMarkSessionEnded_keepsTheFirstReport(t *testing.T) {
 	}
 
 	time.Sleep(1100 * time.Millisecond)
-	_ = st.MarkSessionEnded(id, "CLOSED_SESSION")
+	_ = st.MarkSessionEnded(id, "s", "CLOSED_SESSION")
 	again, _ := st.GetAllBankAccounts()
 	if again[0].SessionEndedAt != first[0].SessionEndedAt {
 		t.Errorf("the ended time moved from %q to %q on a repeated report",
@@ -1883,7 +1883,7 @@ func TestRenewBankAccountSession_forgetsWhatTheOldConsentSaid(t *testing.T) {
 	st := openTestStore(t)
 	denied, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s1", AccountUID: "u1", BankName: "B", BankCountry: "DE", SessionExpiry: "2099-01-01T00:00:00Z"})
 	written, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s2", AccountUID: "u2", BankName: "B", BankCountry: "DE", SessionExpiry: "2099-01-01T00:00:00Z"})
-	_ = st.MarkSessionEnded(denied, "CLOSED_SESSION")
+	_ = st.MarkSessionEnded(denied, "s1", "CLOSED_SESSION")
 	_ = st.SetBalancesAccess(denied, "denied")
 	_ = st.SetOpeningBalanceState(denied, store.OpeningBalanceDenied)
 	_ = st.SetOpeningBalanceState(written, store.OpeningBalanceWritten)
@@ -2039,5 +2039,22 @@ func TestStore_aHeldTransactionKeepsItsIdentity(t *testing.T) {
 	}
 	if got := reviews[0].Identity; got != "2026-09-30|abcd|1" {
 		t.Fatalf("identity %q; a booking released from review must still be recognised when the bank delivers it again", got)
+	}
+}
+
+func TestMarkSessionEnded_leavesAnAccountAlreadyOnANewSession(t *testing.T) {
+	st := openTestStore(t)
+	id, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "old", AccountUID: "u-old", BankName: "B", BankCountry: "DE", SessionExpiry: "2099-01-01T00:00:00Z"})
+	if err := st.RenewBankAccountSession(id, store.Renewal{SessionID: "new", AccountUID: "u-new", SessionExpiry: "2099-06-01T00:00:00Z"}); err != nil {
+		t.Fatalf("RenewBankAccountSession: %v", err)
+	}
+
+	if err := st.MarkSessionEnded(id, "old", "CLOSED_SESSION"); err != nil {
+		t.Fatalf("MarkSessionEnded: %v", err)
+	}
+
+	accounts, _ := st.GetAllBankAccounts()
+	if a := accounts[0]; a.SessionEndedAt != "" {
+		t.Errorf("a sync that read the old session marked the renewed account ended (%q); it would be skipped until renewed again", a.SessionEndedReason)
 	}
 }

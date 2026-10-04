@@ -2377,7 +2377,7 @@ func (s *Syncer) sessionEnded(ctx context.Context, acct store.BankAccount, label
 	if errors.As(err, &apiErr) {
 		reason = apiErr.Code
 	}
-	if markErr := s.st.MarkSessionEnded(acct.ID, reason); markErr != nil {
+	if markErr := s.st.MarkSessionEnded(acct.ID, acct.SessionID, reason); markErr != nil {
 		bookkeepingFailed(ctx, "MarkSessionEnded", label, "", markErr)
 	}
 	log.Printf("[%s] the bank session has ended (%s); renew the account to resume syncing", label, reason)

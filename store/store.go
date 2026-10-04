@@ -663,13 +663,13 @@ func (s *Store) RenewBankAccountSession(id int64, r Renewal) error {
 // The first report's time is kept. Every sync until the renewal reports the same
 // thing again, and the moment the session ended is the useful fact; the moment it
 // was last noticed is not.
-func (s *Store) MarkSessionEnded(id int64, reason string) error {
+func (s *Store) MarkSessionEnded(id int64, sessionID, reason string) error {
 	_, err := s.db.Exec(`
 		UPDATE bank_accounts
 		SET session_ended_at = CASE WHEN session_ended_at = '' THEN ? ELSE session_ended_at END,
 		    session_ended_reason = ?
-		WHERE id = ?`,
-		time.Now().UTC().Format(time.RFC3339), reason, id,
+		WHERE id = ? AND session_id = ?`,
+		time.Now().UTC().Format(time.RFC3339), reason, id, sessionID,
 	)
 	return err
 }

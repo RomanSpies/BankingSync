@@ -2750,7 +2750,7 @@ func TestPickAccount_refusesAnAccountTheBankDidNotOffer(t *testing.T) {
 func TestStatus_saysWhenTheBankEndedASession(t *testing.T) {
 	srv, st := newTestServer(t)
 	id, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s", AccountUID: "u", BankName: "Revolut", BankCountry: "LT", SessionExpiry: "2099-01-01T00:00:00Z"})
-	_ = st.MarkSessionEnded(id, "CLOSED_SESSION")
+	_ = st.MarkSessionEnded(id, "s", "CLOSED_SESSION")
 
 	body := get(t, srv, "/status").Body.String()
 	if !strings.Contains(body, "renew required") {
@@ -2769,7 +2769,7 @@ func TestHealth_countsAnEndedSessionAsDegraded(t *testing.T) {
 	srv, st := newTestServer(t)
 	id, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s", AccountUID: "u", BankName: "Revolut", BankCountry: "LT", SessionExpiry: "2099-01-01T00:00:00Z"})
 	_ = st.SetLastSyncDate("2026-09-25")
-	_ = st.MarkSessionEnded(id, "CLOSED_SESSION")
+	_ = st.MarkSessionEnded(id, "s", "CLOSED_SESSION")
 
 	w := get(t, srv, "/health")
 	if w.Code != http.StatusOK {
