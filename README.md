@@ -182,10 +182,12 @@ The web UI walks you through four steps:
 
 1. **Setup** — upload your `private.pem` and enter your Enable Banking Application ID
 2. **Connect** — pick your country and bank, complete the OAuth flow
-3. **Pick Account** — choose which bank sub-account to sync (showing IBAN, owner, and currency when available), which Actual Budget account to import into, and from which date to start importing
+3. **Pick Account** — choose which of the bank's accounts to sync (showing IBAN, owner, and currency when available), and for each one the Actual Budget account to import into and the date to start importing from
 4. **Status** — see your connected accounts, sync history, and watch the first sync run
 
 That's it. bankingsync syncs automatically from here on. Connect additional banks any time from the Connect page — each one maps to a different Actual Budget account.
+
+**Several accounts at one bank belong in one authorisation.** Some banks allow a person only one active authorisation: authorising a second one ends the first, and every account connected through it stops syncing. So select all the accounts you want on the Pick Account page in one go. If you add one later, the new authorisation takes over the accounts already connected at that bank, as long as you share them with bankingsync again at the bank — they are recognised by their identification hash or IBAN and keep their history.
 
 ## Security
 
@@ -1100,6 +1102,8 @@ immediately, regardless of age.
 ## Session renewal
 
 Enable Banking sessions expire after roughly 180 days. bankingsync warns you by email (if configured) when a session is within 7 days of expiry. To renew, click **Renew** on the Status page and re-authorise with your bank. No data is lost — sync state and transaction history are preserved.
+
+Accounts connected through one authorisation share one session, so renewing any of them renews all those you share again at the bank. An account connected before bankingsync recorded IBANs and identification hashes cannot be recognised that way and is renewed on its own.
 
 ## Updating
 

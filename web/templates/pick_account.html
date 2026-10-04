@@ -23,7 +23,7 @@
   {{if .Renewing}}
   <span>Your bank returned more than one account, and none of them could be matched to <strong>{{.RenewingName}}</strong> automatically. Choose the one that is <strong>{{.RenewingName}}</strong>. It keeps its {{.BackendLabel}} account and its import history.</span>
   {{else}}
-  <span>Choose the bank account to sync and the {{.BackendLabel}} account it should import into.</span>
+  <span>Choose the bank accounts to sync and the {{.BackendLabel}} account each should import into. They share this one authorisation, so renewing it later renews them together.</span>
   {{end}}
 </div>
 
@@ -35,9 +35,10 @@
 
   <p class="section-label">Available accounts</p>
 
+  {{if .Renewing}}
   {{range .Accounts}}
   <label class="acct-card">
-    <input type="radio" name="account_uid" value="{{.EffectiveUID}}" data-suggest="{{.Suggested}}" required>
+    <input type="radio" name="account_uid" value="{{.EffectiveUID}}" required>
     <div>
       <div style="font-size:.88rem;font-weight:500;color:var(--text)">{{.Label}}</div>
       {{with .Describe}}<div style="font-size:.75rem;color:var(--muted);margin-top:.15rem">{{.}}</div>{{end}}
@@ -45,42 +46,49 @@
     </div>
   </label>
   {{end}}
-
-  {{if not .Renewing}}
-  <hr class="divider">
-
-  <div class="field">
-    <label for="target-account">{{.BackendLabel}} Account</label>
-    <input type="text" id="target-account" name="actual_account" value="{{.DefaultAccount}}" placeholder="Leave empty to name it after the bank account" list="known-accounts">
-    <datalist id="known-accounts">{{range .KnownAccounts}}<option value="{{.}}"></option>{{end}}</datalist>
-    <p class="field-hint">The account name in {{.BackendLabel}} where transactions from this bank will be imported. Pick an existing one where possible &mdash; a new name creates a new account. Left empty, it is named after the bank account you selected above.{{if .RenameSafe}} You can rename it in {{.BackendLabel}} later; it is matched by IBAN, not by name.{{end}}</p>
+  {{else}}
+  {{range .Accounts}}
+  <div class="acct-choice">
+  <label class="acct-card">
+    <input type="checkbox" name="account_uid" value="{{.EffectiveUID}}" {{if .Checked}}checked{{end}}>
+    <div>
+      <div style="font-size:.88rem;font-weight:500;color:var(--text)">{{.Label}}</div>
+      {{with .Describe}}<div style="font-size:.75rem;color:var(--muted);margin-top:.15rem">{{.}}</div>{{end}}
+      {{if ne .Label .EffectiveUID}}<span class="acct-uid">{{.EffectiveUID}}</span>{{end}}
+    </div>
+  </label>
+  <fieldset class="acct-fields" style="border:0;padding:0;margin:0 0 1.25rem 2.25rem">
+    <div class="field">
+      <label for="target-{{.EffectiveUID}}">{{$.BackendLabel}} Account</label>
+      <input type="text" id="target-{{.EffectiveUID}}" name="actual_account_{{.EffectiveUID}}" value="{{.Name}}" placeholder="Leave empty to name it after the bank account" list="known-accounts">
+    </div>
+    <div class="field">
+      <label for="start-{{.EffectiveUID}}">Import transactions from</label>
+      <input id="start-{{.EffectiveUID}}" type="date" name="start_sync_date_{{.EffectiveUID}}" value="{{.StartDate}}">
+    </div>
+  </fieldset>
   </div>
-
-  <div class="field">
-    <label for="start-sync-date">Import transactions from</label>
-    <input id="start-sync-date" type="date" name="start_sync_date" value="{{.DefaultStartDate}}">
-    <p class="field-hint">Transactions from this date onwards will be imported on the first sync. Leave as-is for the last 30 days.</p>
-  </div>
+  {{end}}
+  <datalist id="known-accounts">{{range .KnownAccounts}}<option value="{{.}}"></option>{{end}}</datalist>
+  <p class="field-hint">Each account imports into the {{.BackendLabel}} account named next to it. Pick an existing one where possible &mdash; a new name creates a new account, and two bank accounts sharing one name share one {{.BackendLabel}} account. The first sync imports from the date given; the default is the last 30 days.{{if .RenameSafe}} You can rename an account in {{.BackendLabel}} later; it is matched by IBAN, not by name.{{end}}</p>
   {{end}}
 
   <div class="mt-lg">
     <button type="submit" class="btn btn-primary">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
-      {{if .Renewing}}Renew this account{{else}}Use this account{{end}}
+      {{if .Renewing}}Renew this account{{else}}Use the selected accounts{{end}}
     </button>
   </div>
 </form>
 
 <script>
 (function () {
-  var field = document.getElementById('target-account');
-  if (!field) return;
-  var edited = field.value !== '';
-  field.addEventListener('input', function () { edited = true; });
-  document.querySelectorAll('input[name="account_uid"]').forEach(function (radio) {
-    radio.addEventListener('change', function () {
-      if (!edited) field.value = radio.dataset.suggest || '';
-    });
+  document.querySelectorAll('.acct-choice').forEach(function (choice) {
+    var box = choice.querySelector('input[type=checkbox]');
+    var fields = choice.querySelector('.acct-fields');
+    function sync() { fields.hidden = !box.checked; fields.disabled = !box.checked; }
+    box.addEventListener('change', sync);
+    sync();
   });
 })();
 </script>

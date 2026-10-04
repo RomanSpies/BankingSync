@@ -320,8 +320,8 @@ func TestHandlePickAccount_POST_savesActualAccount(t *testing.T) {
 	_ = st.SetSetting("pending_auth_bank_country", "DE")
 
 	w := post(t, srv, "/pick-account", url.Values{
-		"account_uid":    {"uid-1"},
-		"actual_account": {"MyChecking"},
+		"account_uid":          {"uid-1"},
+		"actual_account_uid-1": {"MyChecking"},
 	})
 	if w.Code != http.StatusFound {
 		t.Fatalf("got %d, want 302", w.Code)
@@ -1223,8 +1223,8 @@ func TestHandlePickAccount_POST_persistsIBANAndCurrency(t *testing.T) {
 	_ = st.SetSetting("pending_auth_bank_country", "DE")
 
 	w := post(t, srv, "/pick-account", url.Values{
-		"account_uid":    {"uid-2"},
-		"actual_account": {"MyChecking"},
+		"account_uid":          {"uid-2"},
+		"actual_account_uid-2": {"MyChecking"},
 	})
 	if w.Code != http.StatusFound {
 		t.Fatalf("got %d, want 302", w.Code)
@@ -2698,7 +2698,7 @@ func TestFinishAuth_anAbandonedRenewalDoesNotCaptureTheNextConnection(t *testing
 	finish(t, srv, &enablebanking.SessionResponse{SessionID: "other-sess", Accounts: []enablebanking.SessionAccount{
 		{UID: "other-uid", IBAN: "DE00OTHER", Currency: "EUR"},
 	}})
-	post(t, srv, "/pick-account", url.Values{"account_uid": {"other-uid"}, "actual_account": {"Other"}})
+	post(t, srv, "/pick-account", url.Values{"account_uid": {"other-uid"}, "actual_account_other-uid": {"Other"}})
 
 	accounts, _ := st.GetAllBankAccounts()
 	if len(accounts) != 2 {
@@ -2750,7 +2750,7 @@ func TestPickAccount_refusesAnAccountTheBankDidNotOffer(t *testing.T) {
 func TestStatus_saysWhenTheBankEndedASession(t *testing.T) {
 	srv, st := newTestServer(t)
 	id, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s", AccountUID: "u", BankName: "Revolut", BankCountry: "LT", SessionExpiry: "2099-01-01T00:00:00Z"})
-	_ = st.MarkSessionEnded(id, "CLOSED_SESSION")
+	_ = st.MarkSessionEnded(id, "s", "CLOSED_SESSION")
 
 	body := get(t, srv, "/status").Body.String()
 	if !strings.Contains(body, "renew required") {
@@ -2769,7 +2769,7 @@ func TestHealth_countsAnEndedSessionAsDegraded(t *testing.T) {
 	srv, st := newTestServer(t)
 	id, _ := st.AddBankAccount(store.NewBankAccount{SessionID: "s", AccountUID: "u", BankName: "Revolut", BankCountry: "LT", SessionExpiry: "2099-01-01T00:00:00Z"})
 	_ = st.SetLastSyncDate("2026-09-25")
-	_ = st.MarkSessionEnded(id, "CLOSED_SESSION")
+	_ = st.MarkSessionEnded(id, "s", "CLOSED_SESSION")
 
 	w := get(t, srv, "/health")
 	if w.Code != http.StatusOK {
@@ -2810,5 +2810,16 @@ func TestReview_marksACandidateThatIsItselfWaiting(t *testing.T) {
 	}
 	if n := strings.Count(body, "Its booking is waiting in this queue too"); n != 1 {
 		t.Errorf("the hint for the waiting authorisation appears %d times, want once", n)
+	}
+}
+
+func TestHandleConnect_POST_forgetsAnAbandonedRenewal(t *testing.T) {
+	srv, st := newTestServer(t)
+	_ = st.SetSetting("pending_renew_account_id", "7")
+
+	post(t, srv, "/connect", url.Values{"bank_name": {"Other Bank"}, "bank_country": {"DE"}})
+
+	if v, _ := st.GetSetting("pending_renew_account_id"); v != "" {
+		t.Errorf("pending_renew_account_id is still %q; the next callback would renew account 7 with another bank's session", v)
 	}
 }
