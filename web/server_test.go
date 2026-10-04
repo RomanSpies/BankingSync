@@ -2812,3 +2812,14 @@ func TestReview_marksACandidateThatIsItselfWaiting(t *testing.T) {
 		t.Errorf("the hint for the waiting authorisation appears %d times, want once", n)
 	}
 }
+
+func TestHandleConnect_POST_forgetsAnAbandonedRenewal(t *testing.T) {
+	srv, st := newTestServer(t)
+	_ = st.SetSetting("pending_renew_account_id", "7")
+
+	post(t, srv, "/connect", url.Values{"bank_name": {"Other Bank"}, "bank_country": {"DE"}})
+
+	if v, _ := st.GetSetting("pending_renew_account_id"); v != "" {
+		t.Errorf("pending_renew_account_id is still %q; the next callback would renew account 7 with another bank's session", v)
+	}
+}

@@ -522,6 +522,7 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	_ = s.st.SetSetting("pending_session_state", stateUUID)
 	_ = s.st.SetSetting("pending_bank_name", bankName)
 	_ = s.st.SetSetting("pending_bank_country", bankCountry)
+	_ = s.st.SetSetting("pending_renew_account_id", "")
 	_ = s.st.SetSetting("pending_auth_url", "")
 
 	appBaseURL := detectBaseURL(r, s.st)
