@@ -320,8 +320,8 @@ func TestHandlePickAccount_POST_savesActualAccount(t *testing.T) {
 	_ = st.SetSetting("pending_auth_bank_country", "DE")
 
 	w := post(t, srv, "/pick-account", url.Values{
-		"account_uid":    {"uid-1"},
-		"actual_account": {"MyChecking"},
+		"account_uid":          {"uid-1"},
+		"actual_account_uid-1": {"MyChecking"},
 	})
 	if w.Code != http.StatusFound {
 		t.Fatalf("got %d, want 302", w.Code)
@@ -1223,8 +1223,8 @@ func TestHandlePickAccount_POST_persistsIBANAndCurrency(t *testing.T) {
 	_ = st.SetSetting("pending_auth_bank_country", "DE")
 
 	w := post(t, srv, "/pick-account", url.Values{
-		"account_uid":    {"uid-2"},
-		"actual_account": {"MyChecking"},
+		"account_uid":          {"uid-2"},
+		"actual_account_uid-2": {"MyChecking"},
 	})
 	if w.Code != http.StatusFound {
 		t.Fatalf("got %d, want 302", w.Code)
@@ -2698,7 +2698,7 @@ func TestFinishAuth_anAbandonedRenewalDoesNotCaptureTheNextConnection(t *testing
 	finish(t, srv, &enablebanking.SessionResponse{SessionID: "other-sess", Accounts: []enablebanking.SessionAccount{
 		{UID: "other-uid", IBAN: "DE00OTHER", Currency: "EUR"},
 	}})
-	post(t, srv, "/pick-account", url.Values{"account_uid": {"other-uid"}, "actual_account": {"Other"}})
+	post(t, srv, "/pick-account", url.Values{"account_uid": {"other-uid"}, "actual_account_other-uid": {"Other"}})
 
 	accounts, _ := st.GetAllBankAccounts()
 	if len(accounts) != 2 {
