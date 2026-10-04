@@ -1030,7 +1030,7 @@ func (s *Syncer) run() bool {
 			switch {
 			case daysLeft < 0:
 				log.Printf("WARNING: session for %s expired %d day(s) ago. Renew via %s", label, -daysLeft, webAddr)
-				if s.shouldWarnExpiry(acct.ID, "expired") {
+				if s.shouldWarnExpiry(acct, "expired") {
 					sendEmail(ctx,
 						fmt.Sprintf("BankingSync: %s session has expired", label),
 						fmt.Sprintf("Your Enable Banking session for %s expired %d day(s) ago and syncing has stopped.\n\nRenew it at: %s\n", label, -daysLeft, webAddr),
@@ -1038,7 +1038,7 @@ func (s *Syncer) run() bool {
 				}
 			case daysLeft < 7:
 				log.Printf("WARNING: session for %s expires in %d days. Renew via %s", label, daysLeft, webAddr)
-				if s.shouldWarnExpiry(acct.ID, fmt.Sprintf("d%d", daysLeft)) {
+				if s.shouldWarnExpiry(acct, fmt.Sprintf("d%d", daysLeft)) {
 					sendEmail(ctx,
 						fmt.Sprintf("BankingSync: %s session expires in %d days", label, daysLeft),
 						fmt.Sprintf("Your Enable Banking session for %s expires in %d days.\n\nRenew it at: %s\n", label, daysLeft, webAddr),
@@ -1805,8 +1805,11 @@ func candidateWindow(dateFrom time.Time, txns []enablebanking.Transaction) (time
 	return lo, hi
 }
 
-func (s *Syncer) shouldWarnExpiry(accountID int64, stage string) bool {
-	key := fmt.Sprintf("expiry_warned_%d", accountID)
+func (s *Syncer) shouldWarnExpiry(acct store.BankAccount, stage string) bool {
+	key := fmt.Sprintf("expiry_warned_%d", acct.ID)
+	if acct.SessionID != "" {
+		key = "expiry_warned_session_" + acct.SessionID
+	}
 	prev, _ := s.st.GetSetting(key)
 	if prev == stage {
 		return false
